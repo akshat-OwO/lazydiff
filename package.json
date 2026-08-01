@@ -1,29 +1,48 @@
 {
   "name": "lazydiff",
   "private": true,
+  "workspaces": {
+    "packages": [
+      "apps/*",
+      "packages/*"
+    ],
+    "catalogs": {
+      "types": {
+        "@nubjs/types": "^0.6.0",
+        "@types/node": "^26.1.2"
+      }
+    },
+    "catalog": {
+      "typescript": "^7.0.2"
+    }
+  },
   "scripts": {
     "build": "turbo run build",
+    "check": "turbo run quality",
+    "check-types": "turbo run check-types",
     "dev": "turbo run dev",
-    "lint": "turbo run lint",
-    "format": "prettier --write \"**/*.{ts,tsx,md}\"",
-    "check-types": "turbo run check-types"
+    "fix": "turbo run quality:fix",
+    "format": "oxfmt --check .",
+    "format:fix": "oxfmt .",
+    "lint": "oxlint .",
+    "lint:fix": "oxlint --fix ."
   },
   "devDependencies": {
-    "prettier": "^3.7.4",
+    "oxfmt": "0.61.0",
+    "oxlint": "1.76.0",
     "turbo": "^2.10.7",
-    "typescript": "5.9.2"
-  },
-  "engines": {
-    "node": ">=18"
+    "typescript": "catalog:",
+    "ultracite": "7.9.4"
   },
   "devEngines": {
     "packageManager": {
       "name": "nub",
-      "version": "0.6.0"
+      "version": "^0.6.0",
+      "onFail": "warn"
     }
   },
-  "workspaces": [
-    "apps/*",
-    "packages/*"
-  ]
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "nub@0.6.0"
 }
