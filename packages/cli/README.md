@@ -1,1 +1,1 @@
-# cli
+# LazyDiff CLI
