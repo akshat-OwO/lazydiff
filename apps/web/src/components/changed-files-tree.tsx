@@ -10,6 +10,7 @@ import { SearchIcon } from "lucide-react";
 import { useEffect, useMemo } from "react";
 
 import { Input } from "@/components/ui/input";
+import { toLocationHash } from "@/lib/file-diff-anchor";
 import { cn } from "@/lib/utils";
 
 interface ChangedFilesTreeProps {
@@ -50,8 +51,8 @@ function ChangedFilesTree({
     model.setGitStatus(entries);
   }, [entries, model, paths]);
 
-  // Mirror the routed path into the tree, including selections made by the
-  // browser history or by another tree.
+  // Mirror the selected file into the tree, including selections made by the
+  // browser history or by the diff list.
   useEffect(() => {
     for (const path of model.getSelectedPaths()) {
       if (path !== activePath) {
@@ -64,11 +65,18 @@ function ChangedFilesTree({
     }
   }, [activePath, model]);
 
+  // Directories only expand and collapse; the hash always names a file diff.
   useEffect(() => {
-    if (selectedPath !== undefined && selectedPath !== activePath) {
-      navigate({ params: { _splat: selectedPath }, to: "/$" });
+    if (
+      selectedPath === undefined ||
+      selectedPath === activePath ||
+      model.getItem(selectedPath)?.isDirectory() !== false
+    ) {
+      return;
     }
-  }, [activePath, navigate, selectedPath]);
+
+    navigate({ hash: toLocationHash(selectedPath), to: "/" });
+  }, [activePath, model, navigate, selectedPath]);
 
   return (
     <div className={cn("flex min-h-0 flex-1 flex-col gap-2", className)}>

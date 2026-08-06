@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import { useMatchRoute } from "@tanstack/react-router";
+import { useLocation } from "@tanstack/react-router";
 
 import { ChangedFilesTree } from "@/components/changed-files-tree";
 import {
@@ -8,25 +8,14 @@ import {
   SidebarHeader,
 } from "@/components/ui/sidebar";
 import { Skeleton } from "@/components/ui/skeleton";
-import { normalizeChangedPath } from "@/lib/changed-paths";
+import { fromLocationHash } from "@/lib/file-diff-anchor";
 import { gitStatusAtom } from "@/lib/rpc";
-
-function useActiveChangedPath() {
-  const matchRoute = useMatchRoute();
-  const match = matchRoute({ to: "/$" });
-
-  if (match === false) {
-    return null;
-  }
-
-  const path = normalizeChangedPath(match._splat);
-
-  return path.length > 0 ? path : null;
-}
 
 function AppSidebar() {
   const gitStatus = useAtomValue(gitStatusAtom);
-  const activePath = useActiveChangedPath();
+  const activePath = useLocation({
+    select: (location) => fromLocationHash(location.hash),
+  });
 
   return (
     <Sidebar
