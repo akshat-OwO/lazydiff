@@ -4,22 +4,17 @@
     "moduleResolution": "nodenext",
     "target": "es2024",
     "lib": ["es2024"],
-    "types": ["node", "@nubjs/types"],
+    "types": ["@nubjs/types"],
     "moduleDetection": "force",
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
     "isolatedModules": true,
     "noUncheckedSideEffectImports": true,
-    "resolveJsonModule": true,
-    "esModuleInterop": true,
     "skipLibCheck": true,
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
-    "noEmit": true,
-    "paths": {
-      "@/*": ["./src/*.ts"]
-    }
+    "noEmit": true
   },
-  "include": ["src/**/*.ts", "test/**/*.ts"]
+  "include": ["src/**/*.ts"]
 }

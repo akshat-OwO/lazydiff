@@ -1,6 +1,40 @@
+import { useAtomValue } from "@effect/atom-react";
 import { Link } from "@tanstack/react-router";
 
 import { ModeToggle } from "@/components/mode-toggle";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import { gitBranchChangesAtom } from "@/lib/rpc";
+
+function GitBranchButton() {
+  const branchChanges = useAtomValue(gitBranchChangesAtom);
+
+  if (branchChanges._tag === "Initial") {
+    return (
+      <output aria-label="Connecting to Git">
+        <Skeleton className="h-6 w-20" />
+      </output>
+    );
+  }
+
+  if (branchChanges._tag === "Failure") {
+    return (
+      <Button disabled size="xs" variant="outline">
+        Unavailable
+      </Button>
+    );
+  }
+
+  const { head } = branchChanges.value.data;
+  const label =
+    head._tag === "Branch" ? head.name : `Detached @ ${head.commit}`;
+
+  return (
+    <Button disabled size="xs" variant="outline">
+      {label}
+    </Button>
+  );
+}
 
 function Navbar() {
   return (
@@ -15,7 +49,10 @@ function Navbar() {
         >
           Lazydiff
         </Link>
-        <ModeToggle />
+        <div className="flex items-center gap-2">
+          <GitBranchButton />
+          <ModeToggle />
+        </div>
       </nav>
     </header>
   );

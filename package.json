@@ -31,7 +31,8 @@
     "format": "oxfmt --check .",
     "format:fix": "oxfmt .",
     "lint": "oxlint .",
-    "lint:fix": "oxlint --fix ."
+    "lint:fix": "oxlint --fix .",
+    "test": "turbo run test"
   },
   "devDependencies": {
     "oxfmt": "0.61.0",

@@ -3,6 +3,7 @@ import { Command, Flag } from "effect/unstable/cli";
 
 import { makeHttpServerLayer } from "@/services/http-server";
 import { UiInterface } from "@/services/ui-interface";
+import { resolveWebUrl } from "@/services/web-url";
 
 export const commands = Command.make(
   "lazydiff",
@@ -19,27 +20,32 @@ export const commands = Command.make(
       ),
       host: Config.string("HOST").pipe(Config.withDefault("127.0.0.1")),
       port: Config.number("PORT").pipe(Config.withDefault(7777)),
+      publicWebUrl: Config.string("PUBLIC_URL").pipe(Config.option),
     }).pipe(Config.nested("LAZYDIFF"));
 
-    const browserHost =
-      interfaceConfig.host === "0.0.0.0" ? "127.0.0.1" : interfaceConfig.host;
-    const browserUrl = isProd
-      ? `http://${browserHost}:${interfaceConfig.port}`
-      : interfaceConfig.devWebUrl;
-
+    const browserUrl = yield* resolveWebUrl({
+      devWebUrl: interfaceConfig.devWebUrl,
+      host: interfaceConfig.host,
+      isProd,
+      port: interfaceConfig.port,
+      publicWebUrl: interfaceConfig.publicWebUrl,
+    });
     return yield* Effect.scoped(
       Effect.gen(function* () {
         yield* Layer.build(
           makeHttpServerLayer({
+            allowedOrigin: browserUrl.origin,
             host: interfaceConfig.host,
             port: interfaceConfig.port,
             serveWebUi: isProd,
           })
         );
 
-        if (!noBrowser) {
-          yield* Console.log(`Opening browser at ${browserUrl}...`);
-          yield* uiInterface.open(browserUrl);
+        if (noBrowser) {
+          yield* Console.log(`Lazydiff UI available at ${browserUrl.href}`);
+        } else {
+          yield* Console.log(`Opening browser at ${browserUrl.href}...`);
+          yield* uiInterface.open(browserUrl.href);
         }
 
         return yield* Effect.never;

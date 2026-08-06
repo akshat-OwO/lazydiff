@@ -1,3 +1,4 @@
+import { RegistryProvider } from "@effect/atom-react";
 import { RouterProvider } from "@tanstack/react-router";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
@@ -17,6 +18,8 @@ initializeTheme();
 
 createRoot(rootElement).render(
   <StrictMode>
-    <RouterProvider router={router} />
+    <RegistryProvider>
+      <RouterProvider router={router} />
+    </RegistryProvider>
   </StrictMode>
 );

@@ -5,27 +5,36 @@ import { NodeHttpServer } from "@effect/platform-node";
 import { Layer } from "effect";
 import { HttpRouter, HttpStaticServer } from "effect/unstable/http";
 
+import { makeRpcRoutes } from "@/routes/rpc";
+
 const webRoot = fileURLToPath(
   new URL("../../../../apps/web/dist/", import.meta.url)
 );
 
 export interface HttpServerOptions {
+  readonly allowedOrigin: string;
   readonly host: string;
   readonly port: number;
   readonly serveWebUi: boolean;
 }
 
 export const makeHttpServerLayer = ({
+  allowedOrigin,
   host,
   port,
   serveWebUi,
 }: HttpServerOptions) => {
-  const RoutesLive = serveWebUi
+  const WebRoutesLive = serveWebUi
     ? HttpStaticServer.layer({
         root: webRoot,
         spa: true,
       })
     : Layer.empty;
+
+  const RoutesLive = Layer.merge(
+    makeRpcRoutes({ allowedOrigin }),
+    WebRoutesLive
+  );
 
   return HttpRouter.serve(RoutesLive).pipe(
     Layer.provide(

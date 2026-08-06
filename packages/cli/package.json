@@ -5,10 +5,12 @@
   "scripts": {
     "check-types": "tsc --noEmit",
     "dev": "nub src/index.ts",
-    "start": "nub src/index.ts"
+    "start": "nub src/index.ts",
+    "test": "nub --test test/**/*.test.ts"
   },
   "dependencies": {
     "@effect/platform-node": "catalog:effect",
+    "@lazydiff/protocol": "workspace:*",
     "effect": "catalog:effect",
     "open": "^11.0.0"
   },

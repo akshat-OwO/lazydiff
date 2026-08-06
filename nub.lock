@@ -55,9 +55,15 @@ importers:
       '@base-ui/react':
         specifier: ^1.6.0
         version: 1.6.0(@date-fns/tz@1.5.0)(@types/react@19.2.18)(date-fns@4.4.0)(react@19.2.8)(react-dom@19.2.8(react@19.2.8))
+      '@effect/atom-react':
+        specifier: 4.0.0-beta.102
+        version: 4.0.0-beta.102(effect@4.0.0-beta.102)(react@19.2.8)(scheduler@0.27.0)
       '@fontsource-variable/geist':
         specifier: ^5.3.0
         version: 5.3.0
+      '@lazydiff/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
       '@shadcn/react':
         specifier: ^0.2.1
         version: 0.2.1(@types/react@19.2.18)(react@19.2.8)
@@ -79,6 +85,9 @@ importers:
       date-fns:
         specifier: ^4.4.0
         version: 4.4.0
+      effect:
+        specifier: catalog:effect
+        version: 4.0.0-beta.102
       embla-carousel-react:
         specifier: ^8.6.0
         version: 8.6.0(react@19.2.8)
@@ -146,6 +155,9 @@ importers:
       '@effect/platform-node':
         specifier: catalog:effect
         version: 4.0.0-beta.102(effect@4.0.0-beta.102)(ioredis@5.11.1)
+      '@lazydiff/protocol':
+        specifier: workspace:*
+        version: link:../protocol
       effect:
         specifier: catalog:effect
         version: 4.0.0-beta.102
@@ -159,6 +171,19 @@ importers:
       '@types/node':
         specifier: catalog:types
         version: 26.1.2
+      typescript:
+        specifier: 'catalog:'
+        version: 7.0.2
+
+  packages/protocol:
+    dependencies:
+      effect:
+        specifier: catalog:effect
+        version: 4.0.0-beta.102
+    devDependencies:
+      '@nubjs/types':
+        specifier: catalog:types
+        version: 0.6.0(@types/node@26.1.2)
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -346,6 +371,13 @@ packages:
 
   '@dotenvx/primitives@0.8.0':
     resolution: {integrity: sha512-VYJy0uhFm9zTJ1TxBaW/pA8bjbOM/OttaNMwZ1RHG4JKyRG7DhSdiqD1ipQoAyoD22olUtxbP78W9xY3Wd11bg==}
+
+  '@effect/atom-react@4.0.0-beta.102':
+    resolution: {integrity: sha512-6SX11h7OFwje4YhxYUml9qGjBU8hvnEMrLWe3TKI3lEH/W6tkU/BzajC263eXkxM68h+BJNzE81Ipi5DTfEgug==}
+    peerDependencies:
+      effect: ^4.0.0-beta.102
+      react: ^19.2.4
+      scheduler: '*'
 
   '@effect/platform-node-shared@4.0.0-beta.102':
     resolution: {integrity: sha512-gVd793I72MrkX4dXo7eYtRKfNj0RW4eMRfVEKEJI16h2+mBDCzQ+gqMrog2hSTHQnaIbvbYShNQ4TVGuRCYZeQ==}
@@ -3674,6 +3706,12 @@ snapshots:
       yocto-spinner: 1.2.2
 
   '@dotenvx/primitives@0.8.0': {}
+
+  '@effect/atom-react@4.0.0-beta.102(effect@4.0.0-beta.102)(react@19.2.8)(scheduler@0.27.0)':
+    dependencies:
+      effect: 4.0.0-beta.102
+      react: 19.2.8
+      scheduler: 0.27.0
 
   '@effect/platform-node-shared@4.0.0-beta.102(effect@4.0.0-beta.102)':
     dependencies:
