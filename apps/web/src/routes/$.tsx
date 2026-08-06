@@ -1,6 +1,8 @@
 import { useAtomValue } from "@effect/atom-react";
+import type { GitStatusEntry } from "@lazydiff/protocol";
 import { createFileRoute } from "@tanstack/react-router";
 import { FileQuestionIcon, FolderOpenIcon } from "lucide-react";
+import { useMemo } from "react";
 
 import { ChangedFilesTree } from "@/components/changed-files-tree";
 import { FileDiffView } from "@/components/file-diff-view";
@@ -19,10 +21,22 @@ export const Route = createFileRoute("/$")({
   component: ChangedPathRoute,
 });
 
+const noEntries: readonly GitStatusEntry[] = [];
+
 function ChangedPathRoute() {
   const { _splat } = Route.useParams();
   const path = normalizeChangedPath(_splat);
   const gitStatus = useAtomValue(gitStatusAtom);
+  // The resolved path feeds a file tree that reuses its model across renders,
+  // so it has to keep a stable identity while the changes stay the same.
+  const changedPath = useMemo(
+    () =>
+      resolveChangedPath(
+        gitStatus._tag === "Success" ? gitStatus.value.data.entries : noEntries,
+        path
+      ),
+    [gitStatus, path]
+  );
 
   if (gitStatus._tag === "Initial") {
     return (
@@ -49,15 +63,14 @@ function ChangedPathRoute() {
     );
   }
 
-  const changedPath = resolveChangedPath(gitStatus.value.data.entries, path);
-
   if (changedPath._tag === "File") {
     return <FileDiffView entry={changedPath.entry} />;
   }
 
   if (changedPath._tag === "Directory") {
+    // The tree virtualizes its rows, so it needs a definite height.
     return (
-      <section className="flex min-h-[60svh] flex-col gap-3">
+      <section className="flex h-[calc(100svh-6.5rem)] flex-col gap-3">
         <header className="flex items-center gap-2">
           <FolderOpenIcon className="text-muted-foreground size-4" />
           <h1 className="text-sm font-semibold">{changedPath.path}</h1>

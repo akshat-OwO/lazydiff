@@ -50,7 +50,15 @@ function ChangedFilesTree({
     model.setGitStatus(entries);
   }, [entries, model, paths]);
 
+  // Mirror the routed path into the tree, including selections made by the
+  // browser history or by another tree.
   useEffect(() => {
+    for (const path of model.getSelectedPaths()) {
+      if (path !== activePath) {
+        model.getItem(path)?.deselect();
+      }
+    }
+
     if (activePath !== null) {
       model.getItem(activePath)?.select();
     }
