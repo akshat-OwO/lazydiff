@@ -2,9 +2,11 @@ import { Schema } from "effect";
 import { Rpc, RpcGroup } from "effect/unstable/rpc";
 
 import { GitChangedFilesError } from "./git-errors.ts";
+import { GitFileDiffError } from "./git-file-diff-error.ts";
 import { GitStatusError } from "./git-status-error.ts";
 
 export { GitChangedFilesError } from "./git-errors.ts";
+export { GitFileDiffError } from "./git-file-diff-error.ts";
 export { GitStatusError } from "./git-status-error.ts";
 
 export const BrandId = Schema.Literals([
@@ -12,6 +14,8 @@ export const BrandId = Schema.Literals([
   "git.branch.changed",
   "git.changed-files.get",
   "git.changed-files.result",
+  "git.file-diff.subscribe",
+  "git.file-diff.result",
   "git.status.get",
   "git.status.result",
   "git.status.subscribe",
@@ -92,6 +96,35 @@ export const GitStatusEntry = Schema.Struct({
 
 export type GitStatusEntry = typeof GitStatusEntry.Type;
 
+export const GitFileDiffSubscribe = Schema.Struct({
+  data: Schema.Struct({
+    branch: Schema.optional(NonEmptyString),
+    path: NonEmptyString,
+    scope: GitChangeScope,
+  }),
+  type: Schema.Literal("git.file-diff.subscribe"),
+});
+
+export type GitFileDiffSubscribe = typeof GitFileDiffSubscribe.Type;
+
+export const GitFileDiff = Schema.Struct({
+  /** Unified patch text, empty when the change carries no textual content. */
+  patch: Schema.String,
+  path: NonEmptyString,
+  status: GitFileStatus,
+});
+
+export type GitFileDiff = typeof GitFileDiff.Type;
+
+export const GitFileDiffResult = Schema.Struct({
+  data: Schema.Struct({
+    diff: GitFileDiff,
+  }),
+  type: Schema.Literal("git.file-diff.result"),
+});
+
+export type GitFileDiffResult = typeof GitFileDiffResult.Type;
+
 export const GitStatusGet = Schema.Struct({
   data: Schema.Struct({
     branch: Schema.optional(NonEmptyString),
@@ -133,6 +166,13 @@ const GitChangedFilesGetRpc = Rpc.make("git.changed-files.get", {
   success: GitChangedFilesResult,
 });
 
+const GitFileDiffSubscribeRpc = Rpc.make("git.file-diff.subscribe", {
+  error: GitFileDiffError,
+  payload: GitFileDiffSubscribe,
+  stream: true,
+  success: GitFileDiffResult,
+});
+
 const GitStatusGetRpc = Rpc.make("git.status.get", {
   error: GitStatusError,
   payload: GitStatusGet,
@@ -149,6 +189,7 @@ const GitStatusSubscribeRpc = Rpc.make("git.status.subscribe", {
 export class LazyDiffRpcs extends RpcGroup.make(
   GitBranchSubscribeRpc,
   GitChangedFilesGetRpc,
+  GitFileDiffSubscribeRpc,
   GitStatusGetRpc,
   GitStatusSubscribeRpc
 ) {}

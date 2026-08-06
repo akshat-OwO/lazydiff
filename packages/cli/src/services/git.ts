@@ -19,6 +19,9 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 const maximumRetryDelay = Duration.seconds(5);
 
+/** Git resolves this path to an empty blob on every supported platform. */
+const nullDevice = "/dev/null";
+
 const watcherRetrySchedule = Schedule.exponential("100 millis").pipe(
   Schedule.jittered,
   Schedule.modifyDelay(({ duration }) =>
@@ -221,18 +224,15 @@ const make = (workingDirectory?: string) =>
         ]).pipe(Effect.flatMap(parseGitStatus), Effect.map(sortStatusEntries))
     );
 
-    const committedStatuses = Effect.fn(
-      "lazydiff/services/git/committedStatuses"
+    const resolveComparisonBase = Effect.fn(
+      "lazydiff/services/git/resolveComparisonBase"
     )((branch?: string) =>
       Effect.gen(function* () {
         const baseCommit = yield* branch === undefined
           ? resolveDefaultBranch()
           : resolveCommit(branch);
-        const comparisonBase = yield* run([
-          "merge-base",
-          baseCommit,
-          "HEAD",
-        ]).pipe(
+
+        return yield* run(["merge-base", baseCommit, "HEAD"]).pipe(
           Effect.map((output) => output.trim()),
           Effect.flatMap((commit) =>
             commit.length > 0
@@ -242,6 +242,14 @@ const make = (workingDirectory?: string) =>
                 )
           )
         );
+      })
+    );
+
+    const committedStatuses = Effect.fn(
+      "lazydiff/services/git/committedStatuses"
+    )((branch?: string) =>
+      Effect.gen(function* () {
+        const comparisonBase = yield* resolveComparisonBase(branch);
         const output = yield* run([
           "diff",
           "--name-status",
@@ -277,6 +285,64 @@ const make = (workingDirectory?: string) =>
         fileStatuses(scope, branch).pipe(
           Effect.map((entries) => entries.map(({ path: filePath }) => filePath))
         )
+    );
+
+    const patchFor = (
+      scope: GitChangeScope,
+      entry: GitStatusEntry,
+      branch?: string
+    ) => {
+      if (entry.status === "untracked") {
+        // Untracked files have no index entry to diff against, so compare the
+        // working tree copy with an empty file.
+        return run(["diff", "--no-index", "--", nullDevice, entry.path]);
+      }
+
+      if (scope === "unstaged") {
+        return run(["diff", "--find-renames", "--", entry.path]);
+      }
+
+      if (scope === "staged") {
+        return run(["diff", "--cached", "--find-renames", "--", entry.path]);
+      }
+
+      return resolveComparisonBase(branch).pipe(
+        Effect.flatMap((comparisonBase) =>
+          run([
+            "diff",
+            "--find-renames",
+            comparisonBase,
+            "HEAD",
+            "--",
+            entry.path,
+          ])
+        )
+      );
+    };
+
+    /**
+     * Resolves the unified patch for a single changed file. The requested path
+     * must belong to the scope so a client cannot read files outside the
+     * reported changes.
+     */
+    const fileDiff = Effect.fn("lazydiff/services/git/fileDiff")(
+      (scope: GitChangeScope, filePath: string, branch?: string) =>
+        Effect.gen(function* () {
+          const entries = yield* fileStatuses(scope, branch);
+          const entry = entries.find(
+            (candidate) => candidate.path === filePath
+          );
+
+          if (entry === undefined) {
+            return yield* Effect.fail(
+              new Error(`No ${scope} change found for path: ${filePath}`)
+            );
+          }
+
+          const patch = yield* patchFor(scope, entry, branch);
+
+          return { patch, path: entry.path, status: entry.status };
+        })
     );
 
     const gitDirectory = yield* run(["rev-parse", "--absolute-git-dir"]).pipe(
@@ -323,6 +389,7 @@ const make = (workingDirectory?: string) =>
       branchChanges: SubscriptionRef.changes(branchState),
       changedFiles,
       currentBranch,
+      fileDiff,
       fileStatuses,
       repositoryChanges,
     };

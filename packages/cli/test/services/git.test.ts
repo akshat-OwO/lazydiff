@@ -1,4 +1,4 @@
-import { deepStrictEqual } from "node:assert";
+import { deepStrictEqual, strictEqual } from "node:assert";
 import { test } from "node:test";
 
 import { NodeServices } from "@effect/platform-node";
@@ -179,6 +179,92 @@ test("staged changes work before the first commit", async () => {
   deepStrictEqual(result.statuses, [
     { path: "first-commit.txt", status: "added" },
   ]);
+});
+
+test("fileDiff returns a patch per scope and rejects unchanged paths", async () => {
+  const result = await Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const repository = yield* fileSystem.makeTempDirectoryScoped({
+      prefix: "lazydiff-git-test-",
+    });
+    const run = (args: readonly string[]) =>
+      childProcessSpawner.string(
+        ChildProcess.make("git", args, { cwd: repository })
+      );
+    const commit = (message: string) =>
+      run([
+        "-c",
+        "user.name=Lazydiff Test",
+        "-c",
+        "user.email=test@lazydiff.local",
+        "commit",
+        "-m",
+        message,
+      ]);
+
+    yield* run(["init", "--initial-branch", "main"]);
+    yield* fileSystem.writeFileString(
+      path.join(repository, "tracked.txt"),
+      "first\n"
+    );
+    yield* run(["add", "tracked.txt"]);
+    yield* commit("Initial commit");
+    yield* run(["switch", "-c", "feature"]);
+
+    yield* fileSystem.writeFileString(
+      path.join(repository, "committed.txt"),
+      "committed\n"
+    );
+    yield* run(["add", "committed.txt"]);
+    yield* commit("Feature commit");
+
+    yield* fileSystem.writeFileString(
+      path.join(repository, "staged.txt"),
+      "staged\n"
+    );
+    yield* run(["add", "staged.txt"]);
+    yield* fileSystem.writeFileString(
+      path.join(repository, "tracked.txt"),
+      "second\n"
+    );
+    yield* fileSystem.writeFileString(
+      path.join(repository, "untracked.txt"),
+      "untracked\n"
+    );
+
+    return yield* Effect.gen(function* () {
+      const git = yield* Git;
+
+      return yield* Effect.all({
+        committed: git.fileDiff("committed", "committed.txt"),
+        missing: git.fileDiff("unstaged", "committed.txt").pipe(Effect.flip),
+        staged: git.fileDiff("staged", "staged.txt"),
+        tracked: git.fileDiff("unstaged", "tracked.txt"),
+        untracked: git.fileDiff("unstaged", "untracked.txt"),
+      });
+    }).pipe(Effect.provide(makeGitLive({ workingDirectory: repository })));
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer), Effect.runPromise);
+
+  strictEqual(result.tracked.status, "modified");
+  strictEqual(result.tracked.patch.includes("-first"), true);
+  strictEqual(result.tracked.patch.includes("+second"), true);
+
+  strictEqual(result.untracked.status, "untracked");
+  strictEqual(result.untracked.patch.includes("--- /dev/null"), true);
+  strictEqual(result.untracked.patch.includes("+untracked"), true);
+
+  strictEqual(result.staged.status, "added");
+  strictEqual(result.staged.patch.includes("+staged"), true);
+
+  strictEqual(result.committed.status, "added");
+  strictEqual(result.committed.patch.includes("+committed"), true);
+
+  strictEqual(
+    result.missing.message,
+    "No unstaged change found for path: committed.txt"
+  );
 });
 
 test("changedFiles prefers main when both default branches exist", async () => {

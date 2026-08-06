@@ -73,6 +73,20 @@ export const gitStatusAtom = LazyDiffRpcClient.runtime.atom((get) =>
   ).pipe(Stream.retry(rpcRetrySchedule))
 );
 
+export const gitFileDiffAtom = Atom.family((path: string) =>
+  LazyDiffRpcClient.runtime.atom((get) =>
+    Stream.unwrap(
+      Effect.gen(function* subscribeToGitFileDiff() {
+        const client = yield* LazyDiffRpcClient;
+        return client("git.file-diff.subscribe", {
+          data: { path, scope: get(gitChangeScopeAtom) },
+          type: "git.file-diff.subscribe",
+        });
+      })
+    ).pipe(Stream.retry(rpcRetrySchedule))
+  )
+);
+
 export const gitBranchChangesAtom = LazyDiffRpcClient.runtime.atom(
   Stream.unwrap(
     Effect.gen(function* gitBranchChangesAtom() {
