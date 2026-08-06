@@ -217,7 +217,6 @@ const make = (workingDirectory?: string) =>
           "--name-status",
           "-z",
           "--find-renames",
-          "HEAD",
           "--",
         ]).pipe(Effect.flatMap(parseGitStatus), Effect.map(sortStatusEntries))
     );

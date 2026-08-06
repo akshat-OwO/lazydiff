@@ -146,6 +146,41 @@ test("Git changes are separated by scope with normalized statuses", async () => 
   ]);
 });
 
+test("staged changes work before the first commit", async () => {
+  const result = await Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const repository = yield* fileSystem.makeTempDirectoryScoped({
+      prefix: "lazydiff-git-test-",
+    });
+    const run = (args: readonly string[]) =>
+      childProcessSpawner.string(
+        ChildProcess.make("git", args, { cwd: repository })
+      );
+
+    yield* run(["init", "--initial-branch", "main"]);
+    yield* fileSystem.writeFileString(
+      path.join(repository, "first-commit.txt"),
+      "staged before HEAD exists\n"
+    );
+    yield* run(["add", "first-commit.txt"]);
+
+    return yield* Effect.gen(function* () {
+      const git = yield* Git;
+      return yield* Effect.all({
+        files: git.changedFiles("staged"),
+        statuses: git.fileStatuses("staged"),
+      });
+    }).pipe(Effect.provide(makeGitLive({ workingDirectory: repository })));
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer), Effect.runPromise);
+
+  deepStrictEqual(result.files, ["first-commit.txt"]);
+  deepStrictEqual(result.statuses, [
+    { path: "first-commit.txt", status: "added" },
+  ]);
+});
+
 test("changedFiles prefers main when both default branches exist", async () => {
   const files = await Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
