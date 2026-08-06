@@ -22,6 +22,15 @@ const maximumRetryDelay = Duration.seconds(5);
 /** Git resolves this path to an empty blob on every supported platform. */
 const nullDevice = "/dev/null";
 
+/** Bounds the extra `git diff` processes spawned for untracked files. */
+const untrackedDiffConcurrency = 8;
+
+const joinPatches = (patches: readonly string[]) =>
+  patches
+    .filter((patch) => patch.length > 0)
+    .map((patch) => (patch.endsWith("\n") ? patch : `${patch}\n`))
+    .join("");
+
 const watcherRetrySchedule = Schedule.exponential("100 millis").pipe(
   Schedule.jittered,
   Schedule.modifyDelay(({ duration }) =>
@@ -287,63 +296,49 @@ const make = (workingDirectory?: string) =>
         )
     );
 
-    const patchFor = (
+    const unstagedDiff = Effect.fn("lazydiff/services/git/unstagedDiff")(() =>
+      Effect.gen(function* () {
+        const [trackedPatch, entries] = yield* Effect.all(
+          [run(["diff", "--find-renames", "--"]), unstagedStatuses()],
+          { concurrency: "unbounded" }
+        );
+        // Untracked files have no index entry to diff against, so each one is
+        // compared with an empty file instead.
+        const untrackedPatches = yield* Effect.all(
+          entries
+            .filter(({ status }) => status === "untracked")
+            .map(({ path: filePath }) =>
+              run(["diff", "--no-index", "--", nullDevice, filePath])
+            ),
+          { concurrency: untrackedDiffConcurrency }
+        );
+
+        return joinPatches([trackedPatch, ...untrackedPatches]);
+      })
+    );
+
+    /** Resolves the unified patch covering every changed file in the scope. */
+    const scopeDiff = Effect.fn("lazydiff/services/git/scopeDiff")((
       scope: GitChangeScope,
-      entry: GitStatusEntry,
       branch?: string
     ) => {
-      if (entry.status === "untracked") {
-        // Untracked files have no index entry to diff against, so compare the
-        // working tree copy with an empty file.
-        return run(["diff", "--no-index", "--", nullDevice, entry.path]);
-      }
-
       if (scope === "unstaged") {
-        return run(["diff", "--find-renames", "--", entry.path]);
+        return unstagedDiff();
       }
 
       if (scope === "staged") {
-        return run(["diff", "--cached", "--find-renames", "--", entry.path]);
+        return run(["diff", "--cached", "--find-renames", "--"]).pipe(
+          Effect.map((patch) => joinPatches([patch]))
+        );
       }
 
       return resolveComparisonBase(branch).pipe(
         Effect.flatMap((comparisonBase) =>
-          run([
-            "diff",
-            "--find-renames",
-            comparisonBase,
-            "HEAD",
-            "--",
-            entry.path,
-          ])
-        )
+          run(["diff", "--find-renames", comparisonBase, "HEAD", "--"])
+        ),
+        Effect.map((patch) => joinPatches([patch]))
       );
-    };
-
-    /**
-     * Resolves the unified patch for a single changed file. The requested path
-     * must belong to the scope so a client cannot read files outside the
-     * reported changes.
-     */
-    const fileDiff = Effect.fn("lazydiff/services/git/fileDiff")(
-      (scope: GitChangeScope, filePath: string, branch?: string) =>
-        Effect.gen(function* () {
-          const entries = yield* fileStatuses(scope, branch);
-          const entry = entries.find(
-            (candidate) => candidate.path === filePath
-          );
-
-          if (entry === undefined) {
-            return yield* Effect.fail(
-              new Error(`No ${scope} change found for path: ${filePath}`)
-            );
-          }
-
-          const patch = yield* patchFor(scope, entry, branch);
-
-          return { patch, path: entry.path, status: entry.status };
-        })
-    );
+    });
 
     const gitDirectory = yield* run(["rev-parse", "--absolute-git-dir"]).pipe(
       Effect.map((output) => output.trim())
@@ -389,9 +384,9 @@ const make = (workingDirectory?: string) =>
       branchChanges: SubscriptionRef.changes(branchState),
       changedFiles,
       currentBranch,
-      fileDiff,
       fileStatuses,
       repositoryChanges,
+      scopeDiff,
     };
   });
 

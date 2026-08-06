@@ -181,7 +181,7 @@ test("staged changes work before the first commit", async () => {
   ]);
 });
 
-test("fileDiff returns a patch per scope and rejects unchanged paths", async () => {
+test("scopeDiff returns one patch covering every file in the scope", async () => {
   const result = await Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -238,33 +238,30 @@ test("fileDiff returns a patch per scope and rejects unchanged paths", async () 
       const git = yield* Git;
 
       return yield* Effect.all({
-        committed: git.fileDiff("committed", "committed.txt"),
-        missing: git.fileDiff("unstaged", "committed.txt").pipe(Effect.flip),
-        staged: git.fileDiff("staged", "staged.txt"),
-        tracked: git.fileDiff("unstaged", "tracked.txt"),
-        untracked: git.fileDiff("unstaged", "untracked.txt"),
+        committed: git.scopeDiff("committed"),
+        staged: git.scopeDiff("staged"),
+        unstaged: git.scopeDiff("unstaged"),
       });
     }).pipe(Effect.provide(makeGitLive({ workingDirectory: repository })));
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer), Effect.runPromise);
 
-  strictEqual(result.tracked.status, "modified");
-  strictEqual(result.tracked.patch.includes("-first"), true);
-  strictEqual(result.tracked.patch.includes("+second"), true);
+  // The unstaged patch covers the tracked edit and the untracked file, which
+  // has no index entry to diff against.
+  strictEqual(result.unstaged.includes("diff --git a/tracked.txt"), true);
+  strictEqual(result.unstaged.includes("-first"), true);
+  strictEqual(result.unstaged.includes("+second"), true);
+  strictEqual(result.unstaged.includes("diff --git a/untracked.txt"), true);
+  strictEqual(result.unstaged.includes("--- /dev/null"), true);
+  strictEqual(result.unstaged.includes("+untracked"), true);
+  strictEqual(result.unstaged.includes("staged.txt"), false);
 
-  strictEqual(result.untracked.status, "untracked");
-  strictEqual(result.untracked.patch.includes("--- /dev/null"), true);
-  strictEqual(result.untracked.patch.includes("+untracked"), true);
+  strictEqual(result.staged.includes("diff --git a/staged.txt"), true);
+  strictEqual(result.staged.includes("+staged"), true);
+  strictEqual(result.staged.includes("tracked.txt"), false);
 
-  strictEqual(result.staged.status, "added");
-  strictEqual(result.staged.patch.includes("+staged"), true);
-
-  strictEqual(result.committed.status, "added");
-  strictEqual(result.committed.patch.includes("+committed"), true);
-
-  strictEqual(
-    result.missing.message,
-    "No unstaged change found for path: committed.txt"
-  );
+  strictEqual(result.committed.includes("diff --git a/committed.txt"), true);
+  strictEqual(result.committed.includes("+committed"), true);
+  strictEqual(result.committed.includes("staged.txt"), false);
 });
 
 test("changedFiles prefers main when both default branches exist", async () => {

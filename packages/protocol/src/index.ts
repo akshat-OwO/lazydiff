@@ -1,12 +1,12 @@
 import { Schema } from "effect";
 import { Rpc, RpcGroup } from "effect/unstable/rpc";
 
+import { GitDiffError } from "./git-diff-error.ts";
 import { GitChangedFilesError } from "./git-errors.ts";
-import { GitFileDiffError } from "./git-file-diff-error.ts";
 import { GitStatusError } from "./git-status-error.ts";
 
+export { GitDiffError } from "./git-diff-error.ts";
 export { GitChangedFilesError } from "./git-errors.ts";
-export { GitFileDiffError } from "./git-file-diff-error.ts";
 export { GitStatusError } from "./git-status-error.ts";
 
 export const BrandId = Schema.Literals([
@@ -14,8 +14,8 @@ export const BrandId = Schema.Literals([
   "git.branch.changed",
   "git.changed-files.get",
   "git.changed-files.result",
-  "git.file-diff.subscribe",
-  "git.file-diff.result",
+  "git.diff.subscribe",
+  "git.diff.result",
   "git.status.get",
   "git.status.result",
   "git.status.subscribe",
@@ -96,34 +96,28 @@ export const GitStatusEntry = Schema.Struct({
 
 export type GitStatusEntry = typeof GitStatusEntry.Type;
 
-export const GitFileDiffSubscribe = Schema.Struct({
+export const GitDiffSubscribe = Schema.Struct({
   data: Schema.Struct({
     branch: Schema.optional(NonEmptyString),
-    path: NonEmptyString,
     scope: GitChangeScope,
   }),
-  type: Schema.Literal("git.file-diff.subscribe"),
+  type: Schema.Literal("git.diff.subscribe"),
 });
 
-export type GitFileDiffSubscribe = typeof GitFileDiffSubscribe.Type;
+export type GitDiffSubscribe = typeof GitDiffSubscribe.Type;
 
-export const GitFileDiff = Schema.Struct({
-  /** Unified patch text, empty when the change carries no textual content. */
-  patch: Schema.String,
-  path: NonEmptyString,
-  status: GitFileStatus,
-});
-
-export type GitFileDiff = typeof GitFileDiff.Type;
-
-export const GitFileDiffResult = Schema.Struct({
+export const GitDiffResult = Schema.Struct({
   data: Schema.Struct({
-    diff: GitFileDiff,
+    /**
+     * Unified patch covering every file in the scope, empty when the scope has
+     * no textual changes.
+     */
+    patch: Schema.String,
   }),
-  type: Schema.Literal("git.file-diff.result"),
+  type: Schema.Literal("git.diff.result"),
 });
 
-export type GitFileDiffResult = typeof GitFileDiffResult.Type;
+export type GitDiffResult = typeof GitDiffResult.Type;
 
 export const GitStatusGet = Schema.Struct({
   data: Schema.Struct({
@@ -166,11 +160,11 @@ const GitChangedFilesGetRpc = Rpc.make("git.changed-files.get", {
   success: GitChangedFilesResult,
 });
 
-const GitFileDiffSubscribeRpc = Rpc.make("git.file-diff.subscribe", {
-  error: GitFileDiffError,
-  payload: GitFileDiffSubscribe,
+const GitDiffSubscribeRpc = Rpc.make("git.diff.subscribe", {
+  error: GitDiffError,
+  payload: GitDiffSubscribe,
   stream: true,
-  success: GitFileDiffResult,
+  success: GitDiffResult,
 });
 
 const GitStatusGetRpc = Rpc.make("git.status.get", {
@@ -189,7 +183,7 @@ const GitStatusSubscribeRpc = Rpc.make("git.status.subscribe", {
 export class LazyDiffRpcs extends RpcGroup.make(
   GitBranchSubscribeRpc,
   GitChangedFilesGetRpc,
-  GitFileDiffSubscribeRpc,
+  GitDiffSubscribeRpc,
   GitStatusGetRpc,
   GitStatusSubscribeRpc
 ) {}
