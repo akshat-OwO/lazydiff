@@ -1,4 +1,8 @@
-import type { GitHead } from "@lazydiff/protocol";
+import type {
+  GitFileStatus,
+  GitHead,
+  GitStatusEntry,
+} from "@lazydiff/protocol";
 import {
   Context,
   Duration,
@@ -28,6 +32,72 @@ const detachedHead = (commit: string): GitHead => ({
   commit,
 });
 
+const parseNullSeparatedPaths = (output: string) =>
+  output.split("\0").filter((file) => file.length > 0);
+
+const statusFromCode = (code: string): GitFileStatus | undefined => {
+  switch (code) {
+    case "A":
+    case "C": {
+      return "added";
+    }
+    case "D": {
+      return "deleted";
+    }
+    case "R": {
+      return "renamed";
+    }
+    case "M":
+    case "T":
+    case "U":
+    case "X":
+    case "B": {
+      return "modified";
+    }
+    default: {
+      return undefined;
+    }
+  }
+};
+
+const parseGitStatus = Effect.fn("lazydiff/services/git/parseGitStatus")(
+  (output: string) =>
+    Effect.gen(function* () {
+      const fields = parseNullSeparatedPaths(output);
+      const entries: GitStatusEntry[] = [];
+
+      for (let index = 0; index < fields.length;) {
+        const statusCode = fields[index];
+        const status =
+          statusCode === undefined
+            ? undefined
+            : statusFromCode(statusCode[0] ?? "");
+
+        if (statusCode === undefined || status === undefined) {
+          return yield* Effect.fail(
+            new Error(`Unsupported Git status record: ${statusCode ?? "empty"}`)
+          );
+        }
+
+        const isRenameOrCopy =
+          statusCode.startsWith("R") || statusCode.startsWith("C");
+        const pathIndex = index + (isRenameOrCopy ? 2 : 1);
+        const filePath = fields[pathIndex];
+
+        if (filePath === undefined) {
+          return yield* Effect.fail(
+            new Error(`Missing path for Git status: ${statusCode}`)
+          );
+        }
+
+        entries.push({ path: filePath, status });
+        index += isRenameOrCopy ? 3 : 2;
+      }
+
+      return entries;
+    })
+);
+
 const headsAreEqual = (left: GitHead, right: GitHead) => {
   if (left._tag === "Branch" && right._tag === "Branch") {
     return left.name === right.name;
@@ -46,17 +116,22 @@ const make = (workingDirectory?: string) =>
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
 
-    const run = Effect.fn("lazydiff/services/git/run")(
-      (args: readonly string[]) =>
+    const runFrom = Effect.fn("lazydiff/services/git/runFrom")(
+      (args: readonly string[], cwd?: string) =>
         childProcessSpawner.string(
           ChildProcess.make(
             "git",
             args,
-            workingDirectory === undefined
-              ? undefined
-              : { cwd: workingDirectory }
+            cwd === undefined ? undefined : { cwd }
           )
         )
+    );
+    const repositoryRoot = yield* runFrom(
+      ["rev-parse", "--show-toplevel"],
+      workingDirectory
+    ).pipe(Effect.map((output) => output.trim()));
+    const run = Effect.fn("lazydiff/services/git/run")(
+      (args: readonly string[]) => runFrom(args, repositoryRoot)
     );
 
     const currentBranch = Effect.fn("lazydiff/services/git/currentBranch")(() =>
@@ -72,9 +147,120 @@ const make = (workingDirectory?: string) =>
       )
     );
 
+    const resolveCommit = Effect.fn("lazydiff/services/git/resolveCommit")(
+      (branch: string) =>
+        run([
+          "rev-parse",
+          "--verify",
+          "--quiet",
+          `refs/heads/${branch}^{commit}`,
+        ]).pipe(
+          Effect.map((output) => output.trim()),
+          Effect.flatMap((commit) =>
+            commit.length > 0
+              ? Effect.succeed(commit)
+              : Effect.fail(new Error(`Git branch not found: ${branch}`))
+          )
+        )
+    );
+
+    const resolveDefaultBranch = Effect.fn(
+      "lazydiff/services/git/resolveDefaultBranch"
+    )(() =>
+      run([
+        "rev-parse",
+        "--verify",
+        "--quiet",
+        "refs/heads/main^{commit}",
+      ]).pipe(
+        Effect.map((output) => output.trim()),
+        Effect.flatMap((mainCommit) =>
+          mainCommit.length > 0
+            ? Effect.succeed(mainCommit)
+            : resolveCommit("master")
+        )
+      )
+    );
+
+    const changedFiles = Effect.fn("lazydiff/services/git/changedFiles")(
+      (branch?: string) =>
+        Effect.gen(function* () {
+          const baseCommit = yield* branch === undefined
+            ? resolveDefaultBranch()
+            : resolveCommit(branch);
+          const outputs = yield* Effect.all(
+            [
+              run(["diff", "--name-only", "-z", `${baseCommit}...HEAD`, "--"]),
+              run(["diff", "--cached", "--name-only", "-z", "HEAD", "--"]),
+              run(["diff", "--name-only", "-z", "--"]),
+              run(["ls-files", "--others", "--exclude-standard", "-z"]),
+            ],
+            { concurrency: "unbounded" }
+          );
+
+          return [
+            ...new Set(outputs.flatMap(parseNullSeparatedPaths)),
+          ].toSorted();
+        })
+    );
+
+    const fileStatuses = Effect.fn("lazydiff/services/git/fileStatuses")(
+      (branch?: string) =>
+        Effect.gen(function* () {
+          const baseCommit = yield* branch === undefined
+            ? resolveDefaultBranch()
+            : resolveCommit(branch);
+          const comparisonBase = yield* run([
+            "merge-base",
+            baseCommit,
+            "HEAD",
+          ]).pipe(
+            Effect.map((output) => output.trim()),
+            Effect.flatMap((commit) =>
+              commit.length > 0
+                ? Effect.succeed(commit)
+                : Effect.fail(
+                    new Error("The compared branches have no common ancestor")
+                  )
+            )
+          );
+          const [trackedOutput, untrackedOutput] = yield* Effect.all(
+            [
+              run([
+                "diff",
+                "--name-status",
+                "-z",
+                "--find-renames",
+                comparisonBase,
+                "--",
+              ]),
+              run(["ls-files", "--others", "--exclude-standard", "-z"]),
+            ],
+            { concurrency: "unbounded" }
+          );
+          const trackedEntries = yield* parseGitStatus(trackedOutput);
+          const untrackedEntries = parseNullSeparatedPaths(untrackedOutput).map(
+            (filePath): GitStatusEntry => ({
+              path: filePath,
+              status: "untracked",
+            })
+          );
+
+          return [...trackedEntries, ...untrackedEntries].toSorted(
+            (left, right) => left.path.localeCompare(right.path)
+          );
+        })
+    );
+
     const gitDirectory = yield* run(["rev-parse", "--absolute-git-dir"]).pipe(
       Effect.map((output) => output.trim())
     );
+    const repositoryChanges = fileSystem
+      .watch(repositoryRoot)
+      .pipe(
+        Stream.debounce(Duration.millis(50)),
+        Stream.retry(watcherRetrySchedule)
+      );
     const initialBranch = yield* currentBranch();
     const branchState = yield* SubscriptionRef.make(initialBranch);
 
@@ -108,7 +294,10 @@ const make = (workingDirectory?: string) =>
 
     return {
       branchChanges: SubscriptionRef.changes(branchState),
+      changedFiles,
       currentBranch,
+      fileStatuses,
+      repositoryChanges,
     };
   });
 

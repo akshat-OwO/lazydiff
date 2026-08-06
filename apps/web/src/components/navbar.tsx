@@ -3,6 +3,7 @@ import { Link } from "@tanstack/react-router";
 
 import { ModeToggle } from "@/components/mode-toggle";
 import { Button } from "@/components/ui/button";
+import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { gitBranchChangesAtom } from "@/lib/rpc";
 
@@ -38,17 +39,20 @@ function GitBranchButton() {
 
 function Navbar() {
   return (
-    <header className="bg-background/95 supports-backdrop-filter:bg-background/80 sticky top-0 z-40 border-b backdrop-blur">
+    <header className="bg-sidebar text-sidebar-foreground border-sidebar-border sticky top-0 z-40 border-b">
       <nav
         aria-label="Primary navigation"
-        className="mx-auto flex h-14 w-full max-w-7xl items-center justify-between px-4 sm:px-6"
+        className="flex h-14 w-full items-center justify-between px-4 sm:px-6"
       >
-        <Link
-          className="text-lg font-semibold tracking-tight transition-opacity hover:opacity-80"
-          to="/"
-        >
-          Lazydiff
-        </Link>
+        <div className="flex items-center gap-2">
+          <SidebarTrigger />
+          <Link
+            className="text-lg font-semibold tracking-tight transition-opacity hover:opacity-80"
+            to="/"
+          >
+            Lazydiff
+          </Link>
+        </div>
         <div className="flex items-center gap-2">
           <GitBranchButton />
           <ModeToggle />

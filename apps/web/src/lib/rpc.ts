@@ -58,6 +58,18 @@ export class LazyDiffRpcClient extends AtomRpc.Service<LazyDiffRpcClient>()(
   }
 ) {}
 
+export const gitStatusAtom = LazyDiffRpcClient.runtime.atom(
+  Stream.unwrap(
+    Effect.gen(function* gitStatusAtom() {
+      const client = yield* LazyDiffRpcClient;
+      return client("git.status.subscribe", {
+        data: {},
+        type: "git.status.subscribe",
+      });
+    })
+  ).pipe(Stream.retry(rpcRetrySchedule))
+);
+
 export const gitBranchChangesAtom = LazyDiffRpcClient.runtime.atom(
   Stream.unwrap(
     Effect.gen(function* gitBranchChangesAtom() {

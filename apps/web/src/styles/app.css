@@ -128,3 +128,18 @@
     @apply font-sans;
   }
 }
+
+.changed-files-tree {
+  --trees-bg-override: transparent;
+  --trees-border-color-override: var(--sidebar-border);
+  --trees-fg-muted-override: var(--muted-foreground);
+  --trees-fg-override: var(--sidebar-foreground);
+  --trees-font-family-override: var(--font-sans);
+  --trees-padding-inline-override: 0;
+  --trees-selected-bg-override: var(--sidebar-accent);
+  --trees-selected-fg-override: var(--sidebar-accent-foreground);
+
+  height: 100%;
+  min-height: 0;
+  width: 100%;
+}
