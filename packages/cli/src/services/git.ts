@@ -1,4 +1,5 @@
 import type {
+  GitChangeScope,
   GitFileStatus,
   GitHead,
   GitStatusEntry,
@@ -98,6 +99,9 @@ const parseGitStatus = Effect.fn("lazydiff/services/git/parseGitStatus")(
     })
 );
 
+const sortStatusEntries = (entries: readonly GitStatusEntry[]) =>
+  [...entries].toSorted((left, right) => left.path.localeCompare(right.path));
+
 const headsAreEqual = (left: GitHead, right: GitHead) => {
   if (left._tag === "Branch" && right._tag === "Branch") {
     return left.name === right.name;
@@ -182,74 +186,98 @@ const make = (workingDirectory?: string) =>
       )
     );
 
-    const changedFiles = Effect.fn("lazydiff/services/git/changedFiles")(
-      (branch?: string) =>
-        Effect.gen(function* () {
-          const baseCommit = yield* branch === undefined
-            ? resolveDefaultBranch()
-            : resolveCommit(branch);
-          const outputs = yield* Effect.all(
-            [
-              run(["diff", "--name-only", "-z", `${baseCommit}...HEAD`, "--"]),
-              run(["diff", "--cached", "--name-only", "-z", "HEAD", "--"]),
-              run(["diff", "--name-only", "-z", "--"]),
-              run(["ls-files", "--others", "--exclude-standard", "-z"]),
-            ],
-            { concurrency: "unbounded" }
-          );
+    const unstagedStatuses = Effect.fn(
+      "lazydiff/services/git/unstagedStatuses"
+    )(() =>
+      Effect.gen(function* () {
+        const [trackedOutput, untrackedOutput] = yield* Effect.all(
+          [
+            run(["diff", "--name-status", "-z", "--find-renames", "--"]),
+            run(["ls-files", "--others", "--exclude-standard", "-z"]),
+          ],
+          { concurrency: "unbounded" }
+        );
+        const trackedEntries = yield* parseGitStatus(trackedOutput);
+        const untrackedEntries = parseNullSeparatedPaths(untrackedOutput).map(
+          (filePath): GitStatusEntry => ({
+            path: filePath,
+            status: "untracked",
+          })
+        );
 
-          return [
-            ...new Set(outputs.flatMap(parseNullSeparatedPaths)),
-          ].toSorted();
-        })
+        return sortStatusEntries([...trackedEntries, ...untrackedEntries]);
+      })
     );
 
-    const fileStatuses = Effect.fn("lazydiff/services/git/fileStatuses")(
-      (branch?: string) =>
-        Effect.gen(function* () {
-          const baseCommit = yield* branch === undefined
-            ? resolveDefaultBranch()
-            : resolveCommit(branch);
-          const comparisonBase = yield* run([
-            "merge-base",
-            baseCommit,
-            "HEAD",
-          ]).pipe(
-            Effect.map((output) => output.trim()),
-            Effect.flatMap((commit) =>
-              commit.length > 0
-                ? Effect.succeed(commit)
-                : Effect.fail(
-                    new Error("The compared branches have no common ancestor")
-                  )
-            )
-          );
-          const [trackedOutput, untrackedOutput] = yield* Effect.all(
-            [
-              run([
-                "diff",
-                "--name-status",
-                "-z",
-                "--find-renames",
-                comparisonBase,
-                "--",
-              ]),
-              run(["ls-files", "--others", "--exclude-standard", "-z"]),
-            ],
-            { concurrency: "unbounded" }
-          );
-          const trackedEntries = yield* parseGitStatus(trackedOutput);
-          const untrackedEntries = parseNullSeparatedPaths(untrackedOutput).map(
-            (filePath): GitStatusEntry => ({
-              path: filePath,
-              status: "untracked",
-            })
-          );
+    const stagedStatuses = Effect.fn("lazydiff/services/git/stagedStatuses")(
+      () =>
+        run([
+          "diff",
+          "--cached",
+          "--name-status",
+          "-z",
+          "--find-renames",
+          "HEAD",
+          "--",
+        ]).pipe(Effect.flatMap(parseGitStatus), Effect.map(sortStatusEntries))
+    );
 
-          return [...trackedEntries, ...untrackedEntries].toSorted(
-            (left, right) => left.path.localeCompare(right.path)
-          );
-        })
+    const committedStatuses = Effect.fn(
+      "lazydiff/services/git/committedStatuses"
+    )((branch?: string) =>
+      Effect.gen(function* () {
+        const baseCommit = yield* branch === undefined
+          ? resolveDefaultBranch()
+          : resolveCommit(branch);
+        const comparisonBase = yield* run([
+          "merge-base",
+          baseCommit,
+          "HEAD",
+        ]).pipe(
+          Effect.map((output) => output.trim()),
+          Effect.flatMap((commit) =>
+            commit.length > 0
+              ? Effect.succeed(commit)
+              : Effect.fail(
+                  new Error("The compared branches have no common ancestor")
+                )
+          )
+        );
+        const output = yield* run([
+          "diff",
+          "--name-status",
+          "-z",
+          "--find-renames",
+          comparisonBase,
+          "HEAD",
+          "--",
+        ]);
+        const entries = yield* parseGitStatus(output);
+
+        return sortStatusEntries(entries);
+      })
+    );
+
+    const fileStatuses = Effect.fn("lazydiff/services/git/fileStatuses")((
+      scope: GitChangeScope,
+      branch?: string
+    ) => {
+      if (scope === "unstaged") {
+        return unstagedStatuses();
+      }
+
+      if (scope === "staged") {
+        return stagedStatuses();
+      }
+
+      return committedStatuses(branch);
+    });
+
+    const changedFiles = Effect.fn("lazydiff/services/git/changedFiles")(
+      (scope: GitChangeScope, branch?: string) =>
+        fileStatuses(scope, branch).pipe(
+          Effect.map((entries) => entries.map(({ path: filePath }) => filePath))
+        )
     );
 
     const gitDirectory = yield* run(["rev-parse", "--absolute-git-dir"]).pipe(

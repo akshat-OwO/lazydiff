@@ -63,7 +63,7 @@ test("currentBranch represents branch and detached HEAD states", async () => {
   });
 });
 
-test("Git changes include paths and normalized file statuses", async () => {
+test("Git changes are separated by scope with normalized statuses", async () => {
   const result = await Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -121,21 +121,26 @@ test("Git changes include paths and normalized file statuses", async () => {
     return yield* Effect.gen(function* () {
       const git = yield* Git;
       return yield* Effect.all({
-        files: git.changedFiles(),
-        statuses: git.fileStatuses(),
+        committedFiles: git.changedFiles("committed"),
+        committedStatuses: git.fileStatuses("committed"),
+        stagedFiles: git.changedFiles("staged"),
+        stagedStatuses: git.fileStatuses("staged"),
+        unstagedFiles: git.changedFiles("unstaged"),
+        unstagedStatuses: git.fileStatuses("unstaged"),
       });
     }).pipe(Effect.provide(makeGitLive({ workingDirectory: nestedDirectory })));
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer), Effect.runPromise);
 
-  deepStrictEqual(result.files, [
-    "committed.txt",
-    "staged.txt",
-    "unstaged.txt",
-    "untracked.txt",
-  ]);
-  deepStrictEqual(result.statuses, [
+  deepStrictEqual(result.committedFiles, ["committed.txt"]);
+  deepStrictEqual(result.committedStatuses, [
     { path: "committed.txt", status: "added" },
+  ]);
+  deepStrictEqual(result.stagedFiles, ["staged.txt"]);
+  deepStrictEqual(result.stagedStatuses, [
     { path: "staged.txt", status: "added" },
+  ]);
+  deepStrictEqual(result.unstagedFiles, ["unstaged.txt", "untracked.txt"]);
+  deepStrictEqual(result.unstagedStatuses, [
     { path: "unstaged.txt", status: "modified" },
     { path: "untracked.txt", status: "untracked" },
   ]);
@@ -182,7 +187,7 @@ test("changedFiles prefers main when both default branches exist", async () => {
 
     return yield* Effect.gen(function* () {
       const git = yield* Git;
-      return yield* git.changedFiles();
+      return yield* git.changedFiles("committed");
     }).pipe(Effect.provide(makeGitLive({ workingDirectory: repository })));
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer), Effect.runPromise);
 

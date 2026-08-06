@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "check-types": "tsc --noEmit",
-    "dev": "nub watch src/index.ts",
+    "dev": "nub watch src/index.ts --no-browser",
     "start": "nub src/index.ts",
     "test": "nub --test test/**/*.test.ts"
   },

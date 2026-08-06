@@ -48,9 +48,18 @@ export const GitBranchChanged = Schema.Struct({
 
 export type GitBranchChanged = typeof GitBranchChanged.Type;
 
+export const GitChangeScope = Schema.Literals([
+  "unstaged",
+  "staged",
+  "committed",
+]);
+
+export type GitChangeScope = typeof GitChangeScope.Type;
+
 export const GitChangedFilesGet = Schema.Struct({
   data: Schema.Struct({
     branch: Schema.optional(NonEmptyString),
+    scope: GitChangeScope,
   }),
   type: Schema.Literal("git.changed-files.get"),
 });
@@ -86,6 +95,7 @@ export type GitStatusEntry = typeof GitStatusEntry.Type;
 export const GitStatusGet = Schema.Struct({
   data: Schema.Struct({
     branch: Schema.optional(NonEmptyString),
+    scope: GitChangeScope,
   }),
   type: Schema.Literal("git.status.get"),
 });
@@ -95,6 +105,7 @@ export type GitStatusGet = typeof GitStatusGet.Type;
 export const GitStatusSubscribe = Schema.Struct({
   data: Schema.Struct({
     branch: Schema.optional(NonEmptyString),
+    scope: GitChangeScope,
   }),
   type: Schema.Literal("git.status.subscribe"),
 });

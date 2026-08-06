@@ -1,11 +1,28 @@
-import { useAtomValue } from "@effect/atom-react";
+import { useAtom, useAtomValue } from "@effect/atom-react";
+import type { GitChangeScope } from "@lazydiff/protocol";
 import { Link } from "@tanstack/react-router";
 
 import { ModeToggle } from "@/components/mode-toggle";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Skeleton } from "@/components/ui/skeleton";
-import { gitBranchChangesAtom } from "@/lib/rpc";
+import { gitBranchChangesAtom, gitChangeScopeAtom } from "@/lib/rpc";
+
+const changeScopeOptions: readonly {
+  readonly label: string;
+  readonly value: GitChangeScope;
+}[] = [
+  { label: "Unstaged", value: "unstaged" },
+  { label: "Staged", value: "staged" },
+  { label: "Committed", value: "committed" },
+];
 
 function GitBranchButton() {
   const branchChanges = useAtomValue(gitBranchChangesAtom);
@@ -37,6 +54,37 @@ function GitBranchButton() {
   );
 }
 
+function GitChangeScopeSelect() {
+  const [scope, setScope] = useAtom(gitChangeScopeAtom);
+
+  return (
+    <Select
+      items={changeScopeOptions}
+      onValueChange={(value) => {
+        if (value !== null) {
+          setScope(value);
+        }
+      }}
+      value={scope}
+    >
+      <SelectTrigger
+        aria-label="Change scope"
+        className="border-border bg-background dark:border-input dark:bg-input/30 h-6! rounded-[min(var(--radius-md),10px)] py-0 pr-1.5 pl-2 text-xs [&_svg:not([class*='size-'])]:size-3"
+        size="sm"
+      >
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent align="end">
+        {changeScopeOptions.map(({ label, value }) => (
+          <SelectItem key={value} value={value}>
+            {label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
 function Navbar() {
   return (
     <header className="bg-sidebar text-sidebar-foreground border-sidebar-border sticky top-0 z-40 border-b">
@@ -55,6 +103,7 @@ function Navbar() {
         </div>
         <div className="flex items-center gap-2">
           <GitBranchButton />
+          <GitChangeScopeSelect />
           <ModeToggle />
         </div>
       </nav>

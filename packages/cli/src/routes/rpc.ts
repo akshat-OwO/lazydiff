@@ -36,7 +36,7 @@ const GitRpcHandlersLive = LazyDiffRpcs.toLayer(
           }))
         ),
       "git.changed-files.get": ({ data }) =>
-        git.changedFiles(data.branch).pipe(
+        git.changedFiles(data.scope, data.branch).pipe(
           Effect.map((files) => ({
             data: { files },
             type: "git.changed-files.result" as const,
@@ -44,7 +44,7 @@ const GitRpcHandlersLive = LazyDiffRpcs.toLayer(
           Effect.mapError(toGitChangedFilesError)
         ),
       "git.status.get": ({ data }) =>
-        git.fileStatuses(data.branch).pipe(
+        git.fileStatuses(data.scope, data.branch).pipe(
           Effect.map((entries) => ({
             data: { entries },
             type: "git.status.result" as const,
@@ -56,7 +56,7 @@ const GitRpcHandlersLive = LazyDiffRpcs.toLayer(
           Stream.make("initial" as const),
           git.repositoryChanges
         ).pipe(
-          Stream.mapEffect(() => git.fileStatuses(data.branch)),
+          Stream.mapEffect(() => git.fileStatuses(data.scope, data.branch)),
           Stream.map((entries) => ({
             data: { entries },
             type: "git.status.result" as const,
