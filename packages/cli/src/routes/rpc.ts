@@ -1,4 +1,8 @@
-import { LazyDiffRpcs } from "@lazydiff/protocol";
+import {
+  GitChangedFilesError,
+  GitStatusError,
+  LazyDiffRpcs,
+} from "@lazydiff/protocol";
 import { Effect, Layer, Stream } from "effect";
 import {
   HttpRouter,
@@ -8,6 +12,16 @@ import {
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 import { Git } from "@/services/git";
+
+const toGitChangedFilesError = (error: Error) =>
+  new GitChangedFilesError({
+    message: error.message || "Unable to read changed files",
+  });
+
+const toGitStatusError = (error: Error) =>
+  new GitStatusError({
+    message: error.message || "Unable to read Git status",
+  });
 
 const GitRpcHandlersLive = LazyDiffRpcs.toLayer(
   Effect.gen(function* () {
@@ -20,6 +34,34 @@ const GitRpcHandlersLive = LazyDiffRpcs.toLayer(
             data: { head },
             type: "git.branch.changed" as const,
           }))
+        ),
+      "git.changed-files.get": ({ data }) =>
+        git.changedFiles(data.scope, data.branch).pipe(
+          Effect.map((files) => ({
+            data: { files },
+            type: "git.changed-files.result" as const,
+          })),
+          Effect.mapError(toGitChangedFilesError)
+        ),
+      "git.status.get": ({ data }) =>
+        git.fileStatuses(data.scope, data.branch).pipe(
+          Effect.map((entries) => ({
+            data: { entries },
+            type: "git.status.result" as const,
+          })),
+          Effect.mapError(toGitStatusError)
+        ),
+      "git.status.subscribe": ({ data }) =>
+        Stream.merge(
+          Stream.make("initial" as const),
+          git.repositoryChanges
+        ).pipe(
+          Stream.mapEffect(() => git.fileStatuses(data.scope, data.branch)),
+          Stream.map((entries) => ({
+            data: { entries },
+            type: "git.status.result" as const,
+          })),
+          Stream.mapError(toGitStatusError)
         ),
     };
   })

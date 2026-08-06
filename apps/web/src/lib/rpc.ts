@@ -1,6 +1,7 @@
 import { LazyDiffRpcs } from "@lazydiff/protocol";
+import type { GitChangeScope } from "@lazydiff/protocol";
 import { Duration, Effect, Layer, Schedule, Stream } from "effect";
-import { AtomRpc } from "effect/unstable/reactivity";
+import { Atom, AtomRpc } from "effect/unstable/reactivity";
 import {
   RpcClient,
   RpcClientError,
@@ -57,6 +58,20 @@ export class LazyDiffRpcClient extends AtomRpc.Service<LazyDiffRpcClient>()(
     protocol: RpcProtocolLive,
   }
 ) {}
+
+export const gitChangeScopeAtom = Atom.make<GitChangeScope>("unstaged");
+
+export const gitStatusAtom = LazyDiffRpcClient.runtime.atom((get) =>
+  Stream.unwrap(
+    Effect.gen(function* subscribeToGitStatus() {
+      const client = yield* LazyDiffRpcClient;
+      return client("git.status.subscribe", {
+        data: { scope: get(gitChangeScopeAtom) },
+        type: "git.status.subscribe",
+      });
+    })
+  ).pipe(Stream.retry(rpcRetrySchedule))
+);
 
 export const gitBranchChangesAtom = LazyDiffRpcClient.runtime.atom(
   Stream.unwrap(
