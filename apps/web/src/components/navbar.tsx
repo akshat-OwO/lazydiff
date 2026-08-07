@@ -1,6 +1,7 @@
 import { useAtom, useAtomValue } from "@effect/atom-react";
 import type { GitChangeScope } from "@lazydiff/protocol";
 import { Link } from "@tanstack/react-router";
+import { MessageSquareTextIcon } from "lucide-react";
 
 import { ModeToggle } from "@/components/mode-toggle";
 import { Button } from "@/components/ui/button";
@@ -13,6 +14,7 @@ import {
 } from "@/components/ui/select";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Skeleton } from "@/components/ui/skeleton";
+import { annotationsAtom, annotationsSidebarOpenAtom } from "@/lib/annotations";
 import { gitBranchChangesAtom, gitChangeScopeAtom } from "@/lib/rpc";
 
 const changeScopeOptions: readonly {
@@ -85,6 +87,26 @@ function GitChangeScopeSelect() {
   );
 }
 
+function AnnotationsToggle() {
+  const annotations = useAtomValue(annotationsAtom);
+  const [open, setOpen] = useAtom(annotationsSidebarOpenAtom);
+
+  return (
+    <Button
+      aria-label={open ? "Hide annotations" : "Show annotations"}
+      aria-pressed={open}
+      onClick={() => setOpen(!open)}
+      size="xs"
+      type="button"
+      variant={open ? "secondary" : "outline"}
+    >
+      <MessageSquareTextIcon data-icon="inline-start" />
+      Annotations
+      {annotations.length > 0 ? ` (${annotations.length})` : null}
+    </Button>
+  );
+}
+
 function Navbar() {
   return (
     <header className="bg-sidebar text-sidebar-foreground border-sidebar-border sticky top-0 z-40 border-b">
@@ -104,6 +126,7 @@ function Navbar() {
         <div className="flex items-center gap-2">
           <GitBranchButton />
           <GitChangeScopeSelect />
+          <AnnotationsToggle />
           <ModeToggle />
         </div>
       </nav>
