@@ -114,14 +114,20 @@ function FileDiffCard({
     [annotations, fileDiff.name]
   );
   const annotationsById = useMemo(() => {
-    const map = new Map<string, DiffAnnotation>();
+    const map = new Map<
+      string,
+      { annotation: DiffAnnotation; number: number }
+    >();
 
-    for (const annotation of savedForFile) {
-      map.set(annotation.id, annotation);
+    for (const [index, annotation] of annotations.entries()) {
+      map.set(annotation.id, {
+        annotation,
+        number: index + 1,
+      });
     }
 
     return map;
-  }, [savedForFile]);
+  }, [annotations]);
   const { additions, deletions } = useMemo(
     () => countChangedLines(fileDiff),
     [fileDiff]
@@ -200,7 +206,12 @@ function FileDiffCard({
         return null;
       }
 
-      return <InlineAnnotationComment comment={saved.comment} />;
+      return (
+        <InlineAnnotationComment
+          comment={saved.annotation.comment}
+          number={saved.number}
+        />
+      );
     },
     [annotationsById, draftForFile]
   );
