@@ -41,39 +41,6 @@ export function createAnnotationId(): string {
   return crypto.randomUUID();
 }
 
-/**
- * Prefer an existing multi-line selection when the user clicks +, so the draft
- * covers the whole highlighted range instead of only the clicked line.
- *
- * Pierre 1.2.11 builds the utility-click range from the selection anchors, then
- * overwrites the end point with the hovered line before calling
- * onGutterUtilityClick — so the click range alone is not trustworthy.
- */
-export function resolveAnnotationRange(
-  clickRange: SelectedLineRange,
-  selectedLines: SelectedLineRange | null
-): SelectedLineRange {
-  return selectedLines ?? clickRange;
-}
-
-/**
- * Pierre commits the current selection after `onGutterUtilityClick`. Drop that
- * restore so a controlled selection cleared for the draft stays cleared.
- */
-export function applyLineSelectedUpdate(
-  range: SelectedLineRange | null,
-  dropNext: boolean
-): {
-  readonly dropNext: boolean;
-  readonly selectedLines: SelectedLineRange | null;
-} {
-  if (dropNext) {
-    return { dropNext: false, selectedLines: null };
-  }
-
-  return { dropNext: false, selectedLines: range };
-}
-
 export function removeAnnotation(
   annotations: readonly DiffAnnotation[],
   annotationId: string

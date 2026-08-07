@@ -11,10 +11,8 @@ import {
 import {
   annotationMatchesFileDiff,
   annotationsForScope,
-  applyLineSelectedUpdate,
   formatAnnotationsMarkdown,
   removeAnnotation,
-  resolveAnnotationRange,
 } from "../../src/lib/annotations.ts";
 import type { DiffAnnotation } from "../../src/lib/annotations.ts";
 
@@ -193,38 +191,6 @@ test("annotationMatchesFileDiff rejects a replacement line at the same coordinat
   strictEqual(extractDiffSnippet(replacedDiff, annotation.range), "+three");
 });
 
-test("resolveAnnotationRange prefers an existing multi-line selection", () => {
-  deepStrictEqual(
-    resolveAnnotationRange(
-      { end: 2, side: "additions", start: 2 },
-      { end: 4, endSide: "additions", side: "additions", start: 2 }
-    ),
-    { end: 4, endSide: "additions", side: "additions", start: 2 }
-  );
-});
-
-test("applyLineSelectedUpdate drops Pierre's post-gutter selection commit", () => {
-  const committed = {
-    end: 4,
-    endSide: "additions" as const,
-    side: "additions" as const,
-    start: 2,
-  };
-
-  deepStrictEqual(applyLineSelectedUpdate(committed, true), {
-    dropNext: false,
-    selectedLines: null,
-  });
-  deepStrictEqual(applyLineSelectedUpdate(committed, false), {
-    dropNext: false,
-    selectedLines: committed,
-  });
-  deepStrictEqual(applyLineSelectedUpdate(null, false), {
-    dropNext: false,
-    selectedLines: null,
-  });
-});
-
 test("removeAnnotation drops only the requested id", () => {
   const annotations: readonly DiffAnnotation[] = [
     {
@@ -273,6 +239,41 @@ index 1111111..2222222 100644
     end: 5,
     side: "additions",
     start: 1,
+  });
+  strictEqual(
+    snippet,
+    [
+      "+Line 1: MODIFIED content here",
+      "+Line 2: MODIFIED content here",
+      "+Line 3: MODIFIED content here",
+      "+Line 4: MODIFIED content here",
+      "+Line 5: MODIFIED content here",
+    ].join("\n")
+  );
+});
+
+test("extractDiffSnippet keeps a bottom-to-top multi-line range", () => {
+  const replacedBlock = `diff --git a/test-multiline.txt b/test-multiline.txt
+index 1111111..2222222 100644
+--- a/test-multiline.txt
++++ b/test-multiline.txt
+@@ -1,5 +1,5 @@
+-Line 1: original content here
+-Line 2: original content here
+-Line 3: original content here
+-Line 4: original content here
+-Line 5: original content here
++Line 1: MODIFIED content here
++Line 2: MODIFIED content here
++Line 3: MODIFIED content here
++Line 4: MODIFIED content here
++Line 5: MODIFIED content here
+`;
+  const fileDiff = parseSingleFile(replacedBlock);
+  const snippet = extractDiffSnippet(fileDiff, {
+    end: 1,
+    side: "additions",
+    start: 5,
   });
   strictEqual(
     snippet,

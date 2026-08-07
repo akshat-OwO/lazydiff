@@ -6,7 +6,7 @@ import type {
 } from "@pierre/diffs";
 import { FileDiff } from "@pierre/diffs/react";
 import { ChevronRightIcon } from "lucide-react";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
 import { AnnotationDraftForm } from "@/components/annotation-draft-form";
@@ -23,7 +23,6 @@ import {
   annotationsAtom,
   annotationsForScope,
   draftMatchesFileDiff,
-  resolveAnnotationRange,
 } from "@/lib/annotations";
 import type { DiffAnnotation } from "@/lib/annotations";
 import { fileDiffAnchorId } from "@/lib/file-diff-anchor";
@@ -43,6 +42,22 @@ type AnnotationMetadata =
   | {
       readonly kind: "draft";
     };
+
+const gutterUtilityCSS = `
+[data-column-number] {
+  padding-left: calc(1lh + 1ch);
+}
+
+[data-gutter-utility-slot] {
+  left: 4px;
+  right: auto;
+  justify-content: flex-start;
+}
+
+[data-utility-button] {
+  margin-right: 0;
+}
+`;
 
 interface FileDiffCardProps {
   readonly fileDiff: FileDiffMetadata;
@@ -73,9 +88,9 @@ function FileDiffBody({
     readonly enableLineSelection: true;
     readonly hunkSeparators: "line-info-basic";
     readonly onGutterUtilityClick: (range: SelectedLineRange) => void;
-    readonly onLineSelected: (range: SelectedLineRange | null) => void;
     readonly overflow: "wrap";
     readonly themeType: "dark" | "light" | "system";
+    readonly unsafeCSS: string;
   };
   readonly renderAnnotation: (
     annotation: DiffLineAnnotation<AnnotationMetadata>
@@ -125,11 +140,6 @@ function FileDiffCard({
   const [draft, setDraft] = useAtom(annotationDraftAtom);
   const annotations = useAtomValue(annotationsAtom);
   const [selectionResetKey, setSelectionResetKey] = useState(0);
-  // Pierre shrinks the utility-click range to the hovered line before invoking
-  // onGutterUtilityClick. Keep the last committed selection in a ref so "+" can
-  // still annotate the full highlighted range.
-  const committedSelectionRef = useRef<SelectedLineRange | null>(null);
-  const dropNextLineSelectedRef = useRef(0);
   const scopedAnnotations = useMemo(
     () => annotationsForScope(annotations, scope),
     [annotations, scope]
@@ -175,19 +185,12 @@ function FileDiffCard({
 
   const onGutterUtilityClick = useCallback(
     (range: SelectedLineRange) => {
-      const effectiveRange = resolveAnnotationRange(
-        range,
-        committedSelectionRef.current
-      );
-      const anchor = annotationAnchorForRange(effectiveRange);
-      // Ignore Pierre's post-click selection commit (it reports the hovered line).
-      dropNextLineSelectedRef.current = 1;
-      committedSelectionRef.current = null;
+      const anchor = annotationAnchorForRange(range);
       setDraft({
-        codeDiff: extractDiffSnippet(fileDiff, effectiveRange),
+        codeDiff: extractDiffSnippet(fileDiff, range),
         filePath: fileDiff.name,
         lineNumber: anchor.lineNumber,
-        range: effectiveRange,
+        range,
         scope,
         side: anchor.side,
       });
@@ -195,15 +198,6 @@ function FileDiffCard({
     },
     [fileDiff, scope, setDraft]
   );
-
-  const onLineSelected = useCallback((range: SelectedLineRange | null) => {
-    if (dropNextLineSelectedRef.current > 0) {
-      dropNextLineSelectedRef.current -= 1;
-      return;
-    }
-
-    committedSelectionRef.current = range;
-  }, []);
 
   const options = useMemo(
     () => ({
@@ -213,11 +207,11 @@ function FileDiffCard({
       enableLineSelection: true as const,
       hunkSeparators: "line-info-basic" as const,
       onGutterUtilityClick,
-      onLineSelected,
       overflow: "wrap" as const,
       themeType: theme,
+      unsafeCSS: gutterUtilityCSS,
     }),
-    [onGutterUtilityClick, onLineSelected, theme]
+    [onGutterUtilityClick, theme]
   );
 
   const lineAnnotations = useMemo(() => {

@@ -137,7 +137,7 @@ export function extractDiffSnippet(
   }
 
   const endSide = range.endSide ?? range.side;
-  let endIndex = findLineIndex(lines, range.end, endSide, startIndex);
+  let endIndex = findLineIndex(lines, range.end, endSide, 0);
 
   if (endIndex < 0) {
     endIndex = startIndex;
