@@ -61,6 +61,11 @@ const GitRpcHandlersLive = LazyDiffRpcs.toLayer(
           })),
           Stream.mapError(toGitDiffError)
         ),
+      "git.repository.get": () =>
+        Effect.succeed({
+          data: { name: git.repositoryName },
+          type: "git.repository.result" as const,
+        }),
       "git.status.get": ({ data }) =>
         git.fileStatuses(data.scope, data.branch).pipe(
           Effect.map((entries) => ({
@@ -85,13 +90,14 @@ const GitRpcHandlersLive = LazyDiffRpcs.toLayer(
   })
 );
 
-const makeOriginMiddleware = (allowedOrigin: string) =>
+const makeOriginMiddleware = (allowedOrigins: ReadonlySet<string>) =>
   HttpRouter.middleware(
     Effect.succeed((httpEffect) =>
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest;
+        const { origin } = request.headers;
 
-        return request.headers.origin === allowedOrigin
+        return origin !== undefined && allowedOrigins.has(origin)
           ? yield* httpEffect
           : HttpServerResponse.empty({ status: 403 });
       })
@@ -99,15 +105,15 @@ const makeOriginMiddleware = (allowedOrigin: string) =>
   ).layer;
 
 export interface RpcRoutesOptions {
-  readonly allowedOrigin: string;
+  readonly allowedOrigins: ReadonlySet<string>;
 }
 
-export const makeRpcRoutes = ({ allowedOrigin }: RpcRoutesOptions) =>
+export const makeRpcRoutes = ({ allowedOrigins }: RpcRoutesOptions) =>
   RpcServer.layerHttp({
     group: LazyDiffRpcs,
     path: "/ws",
   }).pipe(
     Layer.provide(GitRpcHandlersLive),
     Layer.provide(RpcSerialization.layerJson),
-    Layer.provide(makeOriginMiddleware(allowedOrigin))
+    Layer.provide(makeOriginMiddleware(allowedOrigins))
   );

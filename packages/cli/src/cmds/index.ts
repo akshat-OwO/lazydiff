@@ -2,8 +2,13 @@ import { Config, Console, Effect, Layer } from "effect";
 import { Command, Flag } from "effect/unstable/cli";
 
 import { makeHttpServerLayer } from "@/services/http-server";
+import { findAvailableListenPort } from "@/services/listen-port";
 import { UiInterface } from "@/services/ui-interface";
-import { resolveWebUrl } from "@/services/web-url";
+import {
+  resolveAllowedOrigins,
+  resolveListenHosts,
+  resolveWebUrl,
+} from "@/services/web-url";
 
 export const commands = Command.make(
   "lazydiff",
@@ -23,23 +28,42 @@ export const commands = Command.make(
       publicWebUrl: Config.string("PUBLIC_URL").pipe(Config.option),
     }).pipe(Config.nested("LAZYDIFF"));
 
+    const preferredPort = interfaceConfig.port;
+    const listenHosts = resolveListenHosts(interfaceConfig.host);
+    const { hosts, port } = yield* findAvailableListenPort({
+      hosts: listenHosts,
+      startPort: preferredPort,
+    });
     const browserUrl = yield* resolveWebUrl({
       devWebUrl: interfaceConfig.devWebUrl,
       host: interfaceConfig.host,
       isProd,
-      port: interfaceConfig.port,
+      port,
       publicWebUrl: interfaceConfig.publicWebUrl,
     });
+    const allowedOrigins = resolveAllowedOrigins(browserUrl);
+
     return yield* Effect.scoped(
       Effect.gen(function* () {
-        yield* Layer.build(
-          makeHttpServerLayer({
-            allowedOrigin: browserUrl.origin,
-            host: interfaceConfig.host,
-            port: interfaceConfig.port,
-            serveWebUi: isProd,
-          })
-        );
+        for (const host of hosts) {
+          // Each listen address needs its own server; avoid memoizing HttpServer.
+          yield* Layer.build(
+            Layer.fresh(
+              makeHttpServerLayer({
+                allowedOrigins,
+                host,
+                port,
+                serveWebUi: isProd,
+              })
+            )
+          );
+        }
+
+        if (port !== preferredPort) {
+          yield* Console.log(
+            `Port ${preferredPort} is in use; listening on ${port}`
+          );
+        }
 
         if (noBrowser) {
           yield* Console.log(`Lazydiff UI available at ${browserUrl.href}`);
