@@ -130,7 +130,11 @@
 }
 
 .changed-files-tree {
-  --trees-bg-override: transparent;
+  /* Solid sidebar paint is required: Pierre's middle-truncate ellipsis masks
+     overflowing glyphs with --trees-bg. Transparent lets the clipped name
+     bleed through the marker (e.g. ".tests.ts" stacking on itself). */
+  --trees-bg-override: var(--sidebar);
+  --trees-bg-muted-override: var(--sidebar-accent);
   --trees-border-color-override: var(--sidebar-border);
   --trees-fg-muted-override: var(--muted-foreground);
   --trees-fg-override: var(--sidebar-foreground);

@@ -1,5 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
+import { parsePatchFiles } from "@pierre/diffs";
 import { useLocation } from "@tanstack/react-router";
+import { useMemo } from "react";
 
 import { ChangedFilesTree } from "@/components/changed-files-tree";
 import {
@@ -9,13 +11,25 @@ import {
 } from "@/components/ui/sidebar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { fromLocationHash } from "@/lib/file-diff-anchor";
-import { gitStatusAtom } from "@/lib/rpc";
+import { sumChangedLines } from "@/lib/file-diff-summary";
+import { gitDiffAtom, gitStatusAtom } from "@/lib/rpc";
 
 function AppSidebar() {
   const gitStatus = useAtomValue(gitStatusAtom);
+  const gitDiff = useAtomValue(gitDiffAtom);
   const activePath = useLocation({
     select: (location) => fromLocationHash(location.hash),
   });
+  const patch = gitDiff._tag === "Success" ? gitDiff.value.data.patch : "";
+  const { additions, deletions } = useMemo(() => {
+    if (patch.length === 0) {
+      return { additions: 0, deletions: 0 };
+    }
+
+    return sumChangedLines(
+      parsePatchFiles(patch).flatMap(({ files }) => files)
+    );
+  }, [patch]);
 
   return (
     <Sidebar
@@ -32,6 +46,20 @@ function AppSidebar() {
               </p>
             )}
           </div>
+          {gitDiff._tag === "Success" && (additions > 0 || deletions > 0) && (
+            <div className="flex shrink-0 items-center gap-1 font-mono text-xs">
+              {deletions > 0 && (
+                <span className="bg-destructive/15 text-destructive rounded-md px-1.5 py-0.5">
+                  -{deletions}
+                </span>
+              )}
+              {additions > 0 && (
+                <span className="rounded-md bg-emerald-500/15 px-1.5 py-0.5 text-emerald-600 dark:text-emerald-400">
+                  +{additions}
+                </span>
+              )}
+            </div>
+          )}
         </div>
       </SidebarHeader>
       <SidebarContent className="p-2">

@@ -1,12 +1,15 @@
 import { useAtomValue } from "@effect/atom-react";
 import { parsePatchFiles } from "@pierre/diffs";
+import type { FileDiffMetadata } from "@pierre/diffs";
 import { useLocation } from "@tanstack/react-router";
 import { FileDiffIcon, FileWarningIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { FileDiffCard } from "@/components/file-diff-card";
+import { Button } from "@/components/ui/button";
 import {
   Empty,
+  EmptyContent,
   EmptyDescription,
   EmptyHeader,
   EmptyMedia,
@@ -15,6 +18,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { fileDiffAnchorId, fromLocationHash } from "@/lib/file-diff-anchor";
 import { unquoteGitPath } from "@/lib/git-path";
+import { preloadFileDiffHighlighter } from "@/lib/preload-file-diff-highlighter";
 import { gitDiffAtom } from "@/lib/rpc";
 
 const withoutPath = (paths: ReadonlySet<string>, path: string) => {
@@ -22,6 +26,18 @@ const withoutPath = (paths: ReadonlySet<string>, path: string) => {
   next.delete(path);
   return next;
 };
+
+type HighlighterPreloadState =
+  | {
+      readonly _tag: "Ready";
+      readonly attempt: number;
+      readonly fileDiffs: readonly FileDiffMetadata[];
+    }
+  | {
+      readonly _tag: "Failed";
+      readonly attempt: number;
+      readonly fileDiffs: readonly FileDiffMetadata[];
+    };
 
 function ChangedFilesDiffs() {
   const gitDiff = useAtomValue(gitDiffAtom);
@@ -52,17 +68,63 @@ function ChangedFilesDiffs() {
             .toSorted((left, right) => left.name.localeCompare(right.name)),
     [patch]
   );
+  const [highlighterPreload, setHighlighterPreload] =
+    useState<HighlighterPreloadState | null>(null);
+  const [preloadAttempt, setPreloadAttempt] = useState(0);
+  const isHighlighterReady =
+    highlighterPreload?._tag === "Ready" &&
+    highlighterPreload.fileDiffs === fileDiffs &&
+    highlighterPreload.attempt === preloadAttempt;
+  const isHighlighterFailed =
+    highlighterPreload?._tag === "Failed" &&
+    highlighterPreload.fileDiffs === fileDiffs &&
+    highlighterPreload.attempt === preloadAttempt;
   const scrolledPath = useRef<string | null>(null);
 
-  // Scroll once per selection: the diffs re-render whenever the repository
-  // changes, which must not drag the reader back to the selected file.
+  useEffect(() => {
+    if (fileDiffs.length === 0) {
+      return;
+    }
+
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        await preloadFileDiffHighlighter(fileDiffs);
+        if (!cancelled) {
+          setHighlighterPreload({
+            _tag: "Ready",
+            attempt: preloadAttempt,
+            fileDiffs,
+          });
+        }
+      } catch {
+        if (!cancelled) {
+          setHighlighterPreload({
+            _tag: "Failed",
+            attempt: preloadAttempt,
+            fileDiffs,
+          });
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [fileDiffs, preloadAttempt]);
+
+  // Scroll once per selection after real diff heights are in the DOM. Skeletons
+  // are short, so scrolling earlier lands on the wrong place once FileDiff
+  // mounts. Repository refreshes keep the same selection and must not yank
+  // the reader back to that file.
   useEffect(() => {
     if (selectedPath === null) {
       scrolledPath.current = null;
       return;
     }
 
-    if (scrolledPath.current === selectedPath) {
+    if (scrolledPath.current === selectedPath || !isHighlighterReady) {
       return;
     }
 
@@ -76,12 +138,16 @@ function ChangedFilesDiffs() {
 
     scrolledPath.current = selectedPath;
     anchor.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, [fileDiffs, selectedPath]);
+  }, [isHighlighterReady, selectedPath]);
 
   const toggleCollapsed = useCallback((path: string) => {
     setCollapsedPaths((paths) =>
       paths.has(path) ? withoutPath(paths, path) : new Set(paths).add(path)
     );
+  }, []);
+
+  const retryHighlighterPreload = useCallback(() => {
+    setPreloadAttempt((attempt) => attempt + 1);
   }, []);
 
   if (gitDiff._tag === "Initial") {
@@ -125,12 +191,34 @@ function ChangedFilesDiffs() {
     );
   }
 
+  if (isHighlighterFailed) {
+    return (
+      <Empty className="min-h-[60svh]">
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <FileWarningIcon />
+          </EmptyMedia>
+          <EmptyTitle>Diffs unavailable</EmptyTitle>
+          <EmptyDescription>
+            Syntax highlighting could not be loaded for these changes.
+          </EmptyDescription>
+        </EmptyHeader>
+        <EmptyContent>
+          <Button onClick={retryHighlighterPreload} type="button">
+            Retry
+          </Button>
+        </EmptyContent>
+      </Empty>
+    );
+  }
+
   return (
     <div>
       {fileDiffs.map((fileDiff) => (
         <FileDiffCard
           fileDiff={fileDiff}
           isCollapsed={collapsedPaths.has(fileDiff.name)}
+          isHighlighterReady={isHighlighterReady}
           key={fileDiff.name}
           onToggle={toggleCollapsed}
         />

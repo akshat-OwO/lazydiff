@@ -8,6 +8,7 @@ import {
   countChangedLines,
   describeChangeWithoutHunks,
   describeModeChange,
+  sumChangedLines,
 } from "../../src/lib/file-diff-summary.ts";
 
 const parseSingleFile = (patch: string): FileDiffMetadata => {
@@ -97,4 +98,14 @@ index 5626abf..f719efd
 
   strictEqual(describeModeChange(fileDiff), "mode 100644 → 100755");
   strictEqual(describeChangeWithoutHunks(fileDiff), null);
+});
+
+test("sumChangedLines totals additions and deletions across files", () => {
+  const fileDiffs = parsePatchFiles(`${textPatch}${textPatch}`).flatMap(
+    ({ files }) => files
+  );
+  const { additions, deletions } = sumChangedLines(fileDiffs);
+
+  strictEqual(additions, 2);
+  strictEqual(deletions, 2);
 });

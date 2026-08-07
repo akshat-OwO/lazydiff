@@ -19,6 +19,21 @@ export function countChangedLines(
   return { additions, deletions };
 }
 
+export function sumChangedLines(
+  fileDiffs: readonly FileDiffMetadata[]
+): ChangedLineCounts {
+  let additions = 0;
+  let deletions = 0;
+
+  for (const fileDiff of fileDiffs) {
+    const counts = countChangedLines(fileDiff);
+    additions += counts.additions;
+    deletions += counts.deletions;
+  }
+
+  return { additions, deletions };
+}
+
 export function describeModeChange(fileDiff: FileDiffMetadata) {
   const { mode, prevMode } = fileDiff;
 
