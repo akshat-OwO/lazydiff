@@ -264,6 +264,63 @@ test("scopeDiff returns one patch covering every file in the scope", async () =>
   strictEqual(result.committed.includes("staged.txt"), false);
 });
 
+test("scopeDiff output is independent of repository display settings", async () => {
+  const result = await Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const repository = yield* fileSystem.makeTempDirectoryScoped({
+      prefix: "lazydiff-git-test-",
+    });
+    const run = (args: readonly string[]) =>
+      childProcessSpawner.string(
+        ChildProcess.make("git", args, { cwd: repository })
+      );
+
+    yield* run(["init", "--initial-branch", "main"]);
+    // Both settings reshape Git output even when it is piped: ANSI escapes
+    // around patch headers, and octal escapes for non-ASCII pathnames.
+    yield* run(["config", "color.ui", "always"]);
+    yield* run(["config", "core.quotePath", "true"]);
+    yield* fileSystem.writeFileString(path.join(repository, "ünïcode.txt"), "");
+    yield* run(["add", "ünïcode.txt"]);
+    yield* run([
+      "-c",
+      "user.name=Lazydiff Test",
+      "-c",
+      "user.email=test@lazydiff.local",
+      "commit",
+      "-m",
+      "Initial commit",
+    ]);
+    yield* fileSystem.writeFileString(
+      path.join(repository, "ünïcode.txt"),
+      "changed\n"
+    );
+
+    return yield* Effect.gen(function* () {
+      const git = yield* Git;
+
+      return yield* Effect.all({
+        patch: git.scopeDiff("unstaged"),
+        statuses: git.fileStatuses("unstaged"),
+      });
+    }).pipe(Effect.provide(makeGitLive({ workingDirectory: repository })));
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer), Effect.runPromise);
+
+  strictEqual(result.patch.includes("\u001B["), false);
+  strictEqual(result.patch.startsWith("diff --git "), true);
+  // The patch has to name files exactly as the status entries do, otherwise the
+  // web UI cannot match a diff to the file it came from.
+  deepStrictEqual(result.statuses, [
+    { path: "ünïcode.txt", status: "modified" },
+  ]);
+  strictEqual(
+    result.patch.includes("diff --git a/ünïcode.txt b/ünïcode.txt"),
+    true
+  );
+});
+
 test("changedFiles prefers main when both default branches exist", async () => {
   const files = await Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;

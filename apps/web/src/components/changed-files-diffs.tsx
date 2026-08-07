@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
 import { fileDiffAnchorId, fromLocationHash } from "@/lib/file-diff-anchor";
+import { unquoteGitPath } from "@/lib/git-path";
 import { gitDiffAtom } from "@/lib/rpc";
 
 const withoutPath = (paths: ReadonlySet<string>, path: string) => {
@@ -37,6 +38,17 @@ function ChangedFilesDiffs() {
         ? []
         : parsePatchFiles(patch)
             .flatMap(({ files }) => files)
+            .map((fileDiff) => {
+              // The parser keeps the pathname exactly as the patch header
+              // spells it, which the tree and the hash cannot match.
+              fileDiff.name = unquoteGitPath(fileDiff.name);
+
+              if (fileDiff.prevName !== undefined) {
+                fileDiff.prevName = unquoteGitPath(fileDiff.prevName);
+              }
+
+              return fileDiff;
+            })
             .toSorted((left, right) => left.name.localeCompare(right.name)),
     [patch]
   );

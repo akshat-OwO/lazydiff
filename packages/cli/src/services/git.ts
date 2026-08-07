@@ -19,6 +19,18 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 const maximumRetryDelay = Duration.seconds(5);
 
+/**
+ * Repository configuration must not change how output is parsed: `color.ui`
+ * would wrap patch headers in ANSI escapes, and `core.quotePath` would escape
+ * non-ASCII pathnames in patch headers while `-z` status output keeps them raw.
+ */
+const machineReadableConfig = [
+  "-c",
+  "color.ui=false",
+  "-c",
+  "core.quotePath=false",
+];
+
 /** Git resolves this path to an empty blob on every supported platform. */
 const nullDevice = "/dev/null";
 
@@ -137,7 +149,7 @@ const make = (workingDirectory?: string) =>
         childProcessSpawner.string(
           ChildProcess.make(
             "git",
-            args,
+            [...machineReadableConfig, ...args],
             cwd === undefined ? undefined : { cwd }
           )
         )

@@ -5,7 +5,8 @@
   "scripts": {
     "check-types": "tsc --noEmit",
     "dev": "vite dev",
-    "build": "vite build"
+    "build": "vite build",
+    "test": "nub --test test/**/*.test.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
