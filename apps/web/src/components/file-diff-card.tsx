@@ -22,7 +22,6 @@ import {
   annotationMatchesFileDiff,
   annotationsAtom,
   annotationsForScope,
-  applyLineSelectedUpdate,
   draftMatchesFileDiff,
   resolveAnnotationRange,
 } from "@/lib/annotations";
@@ -125,7 +124,12 @@ function FileDiffCard({
   const [selectedLines, setSelectedLines] = useState<SelectedLineRange | null>(
     null
   );
-  const dropNextLineSelectedRef = useRef(false);
+  // Pierre shrinks the utility-click range to the hovered line before invoking
+  // onGutterUtilityClick. Keep the last committed selection in a ref so "+" can
+  // still annotate the full highlighted range. A stable gutter callback also
+  // avoids force-rendering the diff on every selection change.
+  const committedSelectionRef = useRef<SelectedLineRange | null>(null);
+  const dropNextLineSelectedRef = useRef(0);
   const scopedAnnotations = useMemo(
     () => annotationsForScope(annotations, scope),
     [annotations, scope]
@@ -171,8 +175,15 @@ function FileDiffCard({
 
   const onGutterUtilityClick = useCallback(
     (range: SelectedLineRange) => {
-      const effectiveRange = resolveAnnotationRange(range, selectedLines);
+      const effectiveRange = resolveAnnotationRange(
+        range,
+        committedSelectionRef.current
+      );
       const anchor = annotationAnchorForRange(effectiveRange);
+      // Drop Pierre's follow-up onLineSelected commit (and a possible notify from
+      // syncing selectedLines=null into the controlled FileDiff).
+      dropNextLineSelectedRef.current = 2;
+      committedSelectionRef.current = null;
       setDraft({
         codeDiff: extractDiffSnippet(fileDiff, effectiveRange),
         filePath: fileDiff.name,
@@ -181,21 +192,20 @@ function FileDiffCard({
         scope,
         side: anchor.side,
       });
-      // Pierre notifies onLineSelected with the committed range after this
-      // callback; drop that restore so the draft opens with selection cleared.
-      dropNextLineSelectedRef.current = true;
       setSelectedLines(null);
     },
-    [fileDiff, scope, selectedLines, setDraft]
+    [fileDiff, scope, setDraft]
   );
 
   const onLineSelected = useCallback((range: SelectedLineRange | null) => {
-    const next = applyLineSelectedUpdate(
-      range,
-      dropNextLineSelectedRef.current
-    );
-    dropNextLineSelectedRef.current = next.dropNext;
-    setSelectedLines(next.selectedLines);
+    if (dropNextLineSelectedRef.current > 0) {
+      dropNextLineSelectedRef.current -= 1;
+      setSelectedLines(null);
+      return;
+    }
+
+    committedSelectionRef.current = range;
+    setSelectedLines(range);
   }, []);
 
   const options = useMemo(

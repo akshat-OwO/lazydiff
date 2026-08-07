@@ -44,6 +44,10 @@ export function createAnnotationId(): string {
 /**
  * Prefer an existing multi-line selection when the user clicks +, so the draft
  * covers the whole highlighted range instead of only the clicked line.
+ *
+ * Pierre 1.2.11 builds the utility-click range from the selection anchors, then
+ * overwrites the end point with the hovered line before calling
+ * onGutterUtilityClick — so the click range alone is not trustworthy.
  */
 export function resolveAnnotationRange(
   clickRange: SelectedLineRange,

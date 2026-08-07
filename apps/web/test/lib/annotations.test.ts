@@ -250,3 +250,38 @@ test("removeAnnotation drops only the requested id", () => {
     ["2"]
   );
 });
+
+test("extractDiffSnippet keeps a multi-line additions replacement range", () => {
+  const replacedBlock = `diff --git a/test-multiline.txt b/test-multiline.txt
+index 1111111..2222222 100644
+--- a/test-multiline.txt
++++ b/test-multiline.txt
+@@ -1,5 +1,5 @@
+-Line 1: original content here
+-Line 2: original content here
+-Line 3: original content here
+-Line 4: original content here
+-Line 5: original content here
++Line 1: MODIFIED content here
++Line 2: MODIFIED content here
++Line 3: MODIFIED content here
++Line 4: MODIFIED content here
++Line 5: MODIFIED content here
+`;
+  const fileDiff = parseSingleFile(replacedBlock);
+  const snippet = extractDiffSnippet(fileDiff, {
+    end: 5,
+    side: "additions",
+    start: 1,
+  });
+  strictEqual(
+    snippet,
+    [
+      "+Line 1: MODIFIED content here",
+      "+Line 2: MODIFIED content here",
+      "+Line 3: MODIFIED content here",
+      "+Line 4: MODIFIED content here",
+      "+Line 5: MODIFIED content here",
+    ].join("\n")
+  );
+});
