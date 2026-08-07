@@ -1,11 +1,17 @@
 import { createServer } from "node:net";
 
-import { Data, Effect } from "effect";
+import { Data, Effect, Result } from "effect";
+import { ServeError } from "effect/unstable/http/HttpServerError";
 
 export class ListenPortError extends Data.TaggedError("ListenPortError")<{
   readonly message: string;
   readonly cause?: unknown;
 }> {}
+
+export interface AvailableListenPort {
+  readonly hosts: readonly string[];
+  readonly port: number;
+}
 
 export interface FindAvailableListenPortOptions {
   readonly hosts: readonly string[];
@@ -21,13 +27,17 @@ export const isAddressInUse = (cause: unknown) =>
   "code" in cause &&
   cause.code === "EADDRINUSE";
 
-const isUnsupportedListenFamily = (cause: unknown) =>
+export const isUnsupportedListenAddress = (cause: unknown) =>
   typeof cause === "object" &&
   cause !== null &&
   "code" in cause &&
   (cause.code === "EAFNOSUPPORT" ||
     cause.code === "EPROTONOSUPPORT" ||
-    cause.code === "ENOTSUP");
+    cause.code === "ENOTSUP" ||
+    cause.code === "EADDRNOTAVAIL");
+
+export const isServeAddressInUse = (error: unknown) =>
+  error instanceof ServeError && isAddressInUse(error.cause);
 
 type ListenProbeResult = "available" | "busy" | "unsupported";
 
@@ -56,7 +66,7 @@ const probeListenPort = Effect.fn(
         return;
       }
 
-      if (isUnsupportedListenFamily(cause)) {
+      if (isUnsupportedListenAddress(cause)) {
         finish(Effect.succeed("unsupported"));
         return;
       }
@@ -147,7 +157,7 @@ export const findAvailableListenPort = Effect.fn(
     }
 
     supportedHosts = nextSupportedHosts;
-    return { hosts: supportedHosts, port };
+    return { hosts: supportedHosts, port } satisfies AvailableListenPort;
   }
 
   return yield* Effect.fail(
@@ -156,3 +166,52 @@ export const findAvailableListenPort = Effect.fn(
     })
   );
 });
+
+/**
+ * Selects a free port, then runs `use`. If the real bind loses a race with
+ * another listener (`EADDRINUSE`), advances and tries again.
+ */
+export const withAvailableListenPort = <A, E, R>(
+  options: FindAvailableListenPortOptions,
+  use: (allocation: AvailableListenPort) => Effect.Effect<A, E, R>
+): Effect.Effect<A, E | ListenPortError, R> =>
+  Effect.gen(function* () {
+    const maxAttempts = options.maxAttempts ?? defaultMaxAttempts;
+    const lastPort = Math.min(options.startPort + maxAttempts - 1, 65_535);
+    let { startPort } = options;
+
+    while (startPort <= lastPort) {
+      const allocation = yield* findAvailableListenPort({
+        hosts: options.hosts,
+        maxAttempts: lastPort - startPort + 1,
+        startPort,
+      });
+      const outcome = yield* use(allocation).pipe(Effect.result);
+
+      if (Result.isSuccess(outcome)) {
+        return outcome.success;
+      }
+
+      if (isServeAddressInUse(outcome.failure) && allocation.port < lastPort) {
+        startPort = allocation.port + 1;
+        continue;
+      }
+
+      if (isServeAddressInUse(outcome.failure)) {
+        return yield* Effect.fail(
+          new ListenPortError({
+            cause: outcome.failure,
+            message: `No available listen port between ${options.startPort} and ${lastPort} on ${options.hosts.join(", ")}`,
+          })
+        );
+      }
+
+      return yield* Effect.fail(outcome.failure);
+    }
+
+    return yield* Effect.fail(
+      new ListenPortError({
+        message: `No available listen port between ${options.startPort} and ${lastPort} on ${options.hosts.join(", ")}`,
+      })
+    );
+  });

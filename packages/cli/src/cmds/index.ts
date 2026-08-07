@@ -1,8 +1,12 @@
 import { Config, Console, Effect, Layer } from "effect";
 import { Command, Flag } from "effect/unstable/cli";
+import { ServeError } from "effect/unstable/http/HttpServerError";
 
 import { makeHttpServerLayer } from "@/services/http-server";
-import { findAvailableListenPort } from "@/services/listen-port";
+import {
+  isUnsupportedListenAddress,
+  withAvailableListenPort,
+} from "@/services/listen-port";
 import { UiInterface } from "@/services/ui-interface";
 import {
   resolveAllowedOrigins,
@@ -30,50 +34,61 @@ export const commands = Command.make(
 
     const preferredPort = interfaceConfig.port;
     const listenHosts = resolveListenHosts(interfaceConfig.host);
-    const { hosts, port } = yield* findAvailableListenPort({
-      hosts: listenHosts,
-      startPort: preferredPort,
-    });
-    const browserUrl = yield* resolveWebUrl({
-      devWebUrl: interfaceConfig.devWebUrl,
-      host: interfaceConfig.host,
-      isProd,
-      port,
-      publicWebUrl: interfaceConfig.publicWebUrl,
-    });
-    const allowedOrigins = resolveAllowedOrigins(browserUrl);
 
-    return yield* Effect.scoped(
-      Effect.gen(function* () {
-        for (const host of hosts) {
-          // Each listen address needs its own server; avoid memoizing HttpServer.
-          yield* Layer.build(
-            Layer.fresh(
-              makeHttpServerLayer({
-                allowedOrigins,
-                host,
-                port,
-                serveWebUi: isProd,
-              })
-            )
-          );
-        }
+    return yield* withAvailableListenPort(
+      {
+        hosts: listenHosts,
+        startPort: preferredPort,
+      },
+      ({ hosts, port }) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const browserUrl = yield* resolveWebUrl({
+              devWebUrl: interfaceConfig.devWebUrl,
+              host: interfaceConfig.host,
+              isProd,
+              port,
+              publicWebUrl: interfaceConfig.publicWebUrl,
+            });
+            const allowedOrigins = resolveAllowedOrigins(browserUrl);
 
-        if (port !== preferredPort) {
-          yield* Console.log(
-            `Port ${preferredPort} is in use; listening on ${port}`
-          );
-        }
+            for (const host of hosts) {
+              // Each listen address needs its own server; avoid memoizing HttpServer.
+              yield* Layer.build(
+                Layer.fresh(
+                  makeHttpServerLayer({
+                    allowedOrigins,
+                    host,
+                    port,
+                    serveWebUi: isProd,
+                  })
+                )
+              ).pipe(
+                Effect.catchIf(
+                  (error): error is ServeError =>
+                    error instanceof ServeError &&
+                    isUnsupportedListenAddress(error.cause),
+                  () => Effect.void
+                )
+              );
+            }
 
-        if (noBrowser) {
-          yield* Console.log(`Lazydiff UI available at ${browserUrl.href}`);
-        } else {
-          yield* Console.log(`Opening browser at ${browserUrl.href}...`);
-          yield* uiInterface.open(browserUrl.href);
-        }
+            if (port !== preferredPort) {
+              yield* Console.log(
+                `Port ${preferredPort} is in use; listening on ${port}`
+              );
+            }
 
-        return yield* Effect.never;
-      })
+            if (noBrowser) {
+              yield* Console.log(`Lazydiff UI available at ${browserUrl.href}`);
+            } else {
+              yield* Console.log(`Opening browser at ${browserUrl.href}...`);
+              yield* uiInterface.open(browserUrl.href);
+            }
+
+            return yield* Effect.never;
+          })
+        )
     );
   })
 ).pipe(

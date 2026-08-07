@@ -4,10 +4,13 @@ import type { Server } from "node:net";
 import { test } from "node:test";
 
 import { Effect } from "effect";
+import { ServeError } from "effect/unstable/http/HttpServerError";
 
 import {
   findAvailableListenPort,
+  isUnsupportedListenAddress,
   ListenPortError,
+  withAvailableListenPort,
 } from "../../src/services/listen-port.ts";
 
 const occupyPort = (host: string, port: number) =>
@@ -110,4 +113,57 @@ test("findAvailableListenPort fails when no port remains in range", async () => 
       );
     })
   ).pipe(Effect.runPromise);
+});
+
+test("unavailable IPv6 loopback is treated as an unsupported listen address", () => {
+  strictEqual(
+    isUnsupportedListenAddress(
+      Object.assign(new Error("address not available"), {
+        code: "EADDRNOTAVAIL",
+      })
+    ),
+    true
+  );
+  strictEqual(
+    isUnsupportedListenAddress(
+      Object.assign(new Error("address in use"), { code: "EADDRINUSE" })
+    ),
+    false
+  );
+});
+
+test("withAvailableListenPort retries after a bind-time EADDRINUSE race", async () => {
+  const result = await Effect.gen(function* () {
+    const preferredPort = yield* allocateEphemeralPort("127.0.0.1");
+    let attempts = 0;
+
+    const port = yield* withAvailableListenPort(
+      {
+        hosts: ["127.0.0.1"],
+        maxAttempts: 5,
+        startPort: preferredPort,
+      },
+      (allocation) => {
+        attempts += 1;
+
+        if (attempts === 1) {
+          strictEqual(allocation.port, preferredPort);
+          return Effect.fail(
+            new ServeError({
+              cause: Object.assign(new Error("listen EADDRINUSE"), {
+                code: "EADDRINUSE",
+              }),
+            })
+          );
+        }
+
+        return Effect.succeed(allocation.port);
+      }
+    );
+
+    return { attempts, port, preferredPort };
+  }).pipe(Effect.runPromise);
+
+  strictEqual(result.attempts, 2);
+  strictEqual(result.port, result.preferredPort + 1);
 });
