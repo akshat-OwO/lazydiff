@@ -5,6 +5,11 @@ import { useMemo } from "react";
 
 import { useTheme } from "@/components/theme-provider";
 import { fileDiffAnchorId } from "@/lib/file-diff-anchor";
+import {
+  countChangedLines,
+  describeChangeWithoutHunks,
+  describeModeChange,
+} from "@/lib/file-diff-summary";
 import { cn } from "@/lib/utils";
 
 interface FileDiffCardProps {
@@ -13,22 +18,15 @@ interface FileDiffCardProps {
   readonly onToggle: (path: string) => void;
 }
 
-const countChangedLines = (fileDiff: FileDiffMetadata) => {
-  let additions = 0;
-  let deletions = 0;
-
-  for (const hunk of fileDiff.hunks) {
-    additions += hunk.additionLines;
-    deletions += hunk.deletionLines;
-  }
-
-  return { additions, deletions };
-};
-
 function FileDiffCard({ fileDiff, isCollapsed, onToggle }: FileDiffCardProps) {
   const { theme } = useTheme();
   const { additions, deletions } = useMemo(
     () => countChangedLines(fileDiff),
+    [fileDiff]
+  );
+  const modeChange = useMemo(() => describeModeChange(fileDiff), [fileDiff]);
+  const changeWithoutHunks = useMemo(
+    () => describeChangeWithoutHunks(fileDiff),
     [fileDiff]
   );
   const options = useMemo(
@@ -64,6 +62,11 @@ function FileDiffCard({ fileDiff, isCollapsed, onToggle }: FileDiffCardProps) {
             ? fileDiff.name
             : `${fileDiff.prevName} → ${fileDiff.name}`}
         </span>
+        {modeChange !== null && (
+          <span className="text-muted-foreground shrink-0 font-mono text-xs">
+            {modeChange}
+          </span>
+        )}
         <span className="ml-auto shrink-0 font-mono text-xs">
           <span className="text-destructive">-{deletions}</span>{" "}
           <span className="text-emerald-600 dark:text-emerald-400">
@@ -71,7 +74,15 @@ function FileDiffCard({ fileDiff, isCollapsed, onToggle }: FileDiffCardProps) {
           </span>
         </span>
       </button>
-      <FileDiff fileDiff={fileDiff} options={options} />
+      {changeWithoutHunks === null ? (
+        <FileDiff fileDiff={fileDiff} options={options} />
+      ) : (
+        !isCollapsed && (
+          <p className="text-muted-foreground px-4 py-3 text-sm">
+            {changeWithoutHunks}
+          </p>
+        )
+      )}
     </section>
   );
 }
