@@ -1,5 +1,6 @@
 import {
   GitChangedFilesError,
+  GitDiffError,
   GitStatusError,
   LazyDiffRpcs,
 } from "@lazydiff/protocol";
@@ -16,6 +17,11 @@ import { Git } from "@/services/git";
 const toGitChangedFilesError = (error: Error) =>
   new GitChangedFilesError({
     message: error.message || "Unable to read changed files",
+  });
+
+const toGitDiffError = (error: Error) =>
+  new GitDiffError({
+    message: error.message || "Unable to read the diff",
   });
 
 const toGitStatusError = (error: Error) =>
@@ -42,6 +48,18 @@ const GitRpcHandlersLive = LazyDiffRpcs.toLayer(
             type: "git.changed-files.result" as const,
           })),
           Effect.mapError(toGitChangedFilesError)
+        ),
+      "git.diff.subscribe": ({ data }) =>
+        Stream.merge(
+          Stream.make("initial" as const),
+          git.repositoryChanges
+        ).pipe(
+          Stream.mapEffect(() => git.scopeDiff(data.scope, data.branch)),
+          Stream.map((patch) => ({
+            data: { patch },
+            type: "git.diff.result" as const,
+          })),
+          Stream.mapError(toGitDiffError)
         ),
       "git.status.get": ({ data }) =>
         git.fileStatuses(data.scope, data.branch).pipe(

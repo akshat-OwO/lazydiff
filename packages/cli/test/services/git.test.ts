@@ -1,4 +1,4 @@
-import { deepStrictEqual } from "node:assert";
+import { deepStrictEqual, strictEqual } from "node:assert";
 import { test } from "node:test";
 
 import { NodeServices } from "@effect/platform-node";
@@ -179,6 +179,148 @@ test("staged changes work before the first commit", async () => {
   deepStrictEqual(result.statuses, [
     { path: "first-commit.txt", status: "added" },
   ]);
+});
+
+test("scopeDiff returns one patch covering every file in the scope", async () => {
+  const result = await Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const repository = yield* fileSystem.makeTempDirectoryScoped({
+      prefix: "lazydiff-git-test-",
+    });
+    const run = (args: readonly string[]) =>
+      childProcessSpawner.string(
+        ChildProcess.make("git", args, { cwd: repository })
+      );
+    const commit = (message: string) =>
+      run([
+        "-c",
+        "user.name=Lazydiff Test",
+        "-c",
+        "user.email=test@lazydiff.local",
+        "commit",
+        "-m",
+        message,
+      ]);
+
+    yield* run(["init", "--initial-branch", "main"]);
+    yield* fileSystem.writeFileString(
+      path.join(repository, "tracked.txt"),
+      "first\n"
+    );
+    yield* run(["add", "tracked.txt"]);
+    yield* commit("Initial commit");
+    yield* run(["switch", "-c", "feature"]);
+
+    yield* fileSystem.writeFileString(
+      path.join(repository, "committed.txt"),
+      "committed\n"
+    );
+    yield* run(["add", "committed.txt"]);
+    yield* commit("Feature commit");
+
+    yield* fileSystem.writeFileString(
+      path.join(repository, "staged.txt"),
+      "staged\n"
+    );
+    yield* run(["add", "staged.txt"]);
+    yield* fileSystem.writeFileString(
+      path.join(repository, "tracked.txt"),
+      "second\n"
+    );
+    yield* fileSystem.writeFileString(
+      path.join(repository, "untracked.txt"),
+      "untracked\n"
+    );
+
+    return yield* Effect.gen(function* () {
+      const git = yield* Git;
+
+      return yield* Effect.all({
+        committed: git.scopeDiff("committed"),
+        staged: git.scopeDiff("staged"),
+        unstaged: git.scopeDiff("unstaged"),
+      });
+    }).pipe(Effect.provide(makeGitLive({ workingDirectory: repository })));
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer), Effect.runPromise);
+
+  // The unstaged patch covers the tracked edit and the untracked file, which
+  // has no index entry to diff against.
+  strictEqual(result.unstaged.includes("diff --git a/tracked.txt"), true);
+  strictEqual(result.unstaged.includes("-first"), true);
+  strictEqual(result.unstaged.includes("+second"), true);
+  strictEqual(result.unstaged.includes("diff --git a/untracked.txt"), true);
+  strictEqual(result.unstaged.includes("--- /dev/null"), true);
+  strictEqual(result.unstaged.includes("+untracked"), true);
+  strictEqual(result.unstaged.includes("staged.txt"), false);
+
+  strictEqual(result.staged.includes("diff --git a/staged.txt"), true);
+  strictEqual(result.staged.includes("+staged"), true);
+  strictEqual(result.staged.includes("tracked.txt"), false);
+
+  strictEqual(result.committed.includes("diff --git a/committed.txt"), true);
+  strictEqual(result.committed.includes("+committed"), true);
+  strictEqual(result.committed.includes("staged.txt"), false);
+});
+
+test("scopeDiff output is independent of repository display settings", async () => {
+  const result = await Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const repository = yield* fileSystem.makeTempDirectoryScoped({
+      prefix: "lazydiff-git-test-",
+    });
+    const run = (args: readonly string[]) =>
+      childProcessSpawner.string(
+        ChildProcess.make("git", args, { cwd: repository })
+      );
+
+    yield* run(["init", "--initial-branch", "main"]);
+    // These settings reshape Git output even when it is piped: ANSI escapes
+    // around patch headers, and octal escapes for non-ASCII pathnames. The
+    // specific `color.diff` key overrides the general `color.ui` default.
+    yield* run(["config", "color.ui", "always"]);
+    yield* run(["config", "color.diff", "always"]);
+    yield* run(["config", "core.quotePath", "true"]);
+    yield* fileSystem.writeFileString(path.join(repository, "ünïcode.txt"), "");
+    yield* run(["add", "ünïcode.txt"]);
+    yield* run([
+      "-c",
+      "user.name=Lazydiff Test",
+      "-c",
+      "user.email=test@lazydiff.local",
+      "commit",
+      "-m",
+      "Initial commit",
+    ]);
+    yield* fileSystem.writeFileString(
+      path.join(repository, "ünïcode.txt"),
+      "changed\n"
+    );
+
+    return yield* Effect.gen(function* () {
+      const git = yield* Git;
+
+      return yield* Effect.all({
+        patch: git.scopeDiff("unstaged"),
+        statuses: git.fileStatuses("unstaged"),
+      });
+    }).pipe(Effect.provide(makeGitLive({ workingDirectory: repository })));
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer), Effect.runPromise);
+
+  strictEqual(result.patch.includes("\u001B["), false);
+  strictEqual(result.patch.startsWith("diff --git "), true);
+  // The patch has to name files exactly as the status entries do, otherwise the
+  // web UI cannot match a diff to the file it came from.
+  deepStrictEqual(result.statuses, [
+    { path: "ünïcode.txt", status: "modified" },
+  ]);
+  strictEqual(
+    result.patch.includes("diff --git a/ünïcode.txt b/ünïcode.txt"),
+    true
+  );
 });
 
 test("changedFiles prefers main when both default branches exist", async () => {

@@ -17,9 +17,7 @@ function RootLayout() {
         <div className="flex min-h-[calc(100svh-3.5rem)] w-full">
           <AppSidebar />
           <SidebarInset className="min-h-[calc(100svh-3.5rem)]">
-            <div className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6">
-              <Outlet />
-            </div>
+            <Outlet />
           </SidebarInset>
         </div>
       </SidebarProvider>

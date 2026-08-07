@@ -1,71 +1,21 @@
 import { useAtomValue } from "@effect/atom-react";
-import type { GitStatusEntry } from "@lazydiff/protocol";
-import { FileTree, useFileTree, useFileTreeSearch } from "@pierre/trees/react";
-import { SearchIcon } from "lucide-react";
-import { useEffect, useMemo } from "react";
+import { useLocation } from "@tanstack/react-router";
 
+import { ChangedFilesTree } from "@/components/changed-files-tree";
 import {
   Sidebar,
   SidebarContent,
   SidebarHeader,
-  SidebarInput,
 } from "@/components/ui/sidebar";
 import { Skeleton } from "@/components/ui/skeleton";
+import { fromLocationHash } from "@/lib/file-diff-anchor";
 import { gitStatusAtom } from "@/lib/rpc";
-
-interface ChangedFilesTreeProps {
-  readonly entries: readonly GitStatusEntry[];
-}
-
-function ChangedFilesTree({ entries }: ChangedFilesTreeProps) {
-  const paths = useMemo(() => entries.map(({ path }) => path), [entries]);
-  const { model } = useFileTree({
-    density: "compact",
-    dragAndDrop: false,
-    fileTreeSearchMode: "hide-non-matches",
-    flattenEmptyDirectories: true,
-    gitStatus: entries,
-    icons: "standard",
-    initialExpansion: "open",
-    paths,
-    renaming: false,
-    search: false,
-  });
-  const search = useFileTreeSearch(model);
-
-  useEffect(() => {
-    model.resetPaths(paths);
-    model.setGitStatus(entries);
-  }, [entries, model, paths]);
-
-  return (
-    <div className="flex min-h-0 flex-1 flex-col gap-2">
-      <div className="relative shrink-0">
-        <SearchIcon className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2" />
-        <SidebarInput
-          aria-label="Search changed files"
-          className="pl-8"
-          onChange={(event) => search.setValue(event.currentTarget.value)}
-          placeholder="Search files"
-          type="search"
-          value={search.value}
-        />
-      </div>
-      {search.value.length > 0 && search.matchingPaths.length === 0 ? (
-        <p className="text-muted-foreground p-3 text-sm">No matching files</p>
-      ) : (
-        <FileTree
-          aria-label="Changed files"
-          className="changed-files-tree"
-          model={model}
-        />
-      )}
-    </div>
-  );
-}
 
 function AppSidebar() {
   const gitStatus = useAtomValue(gitStatusAtom);
+  const activePath = useLocation({
+    select: (location) => fromLocationHash(location.hash),
+  });
 
   return (
     <Sidebar
@@ -103,7 +53,11 @@ function AppSidebar() {
               No changed files
             </p>
           ) : (
-            <ChangedFilesTree entries={gitStatus.value.data.entries} />
+            <ChangedFilesTree
+              activePath={activePath}
+              entries={gitStatus.value.data.entries}
+              label="Changed files"
+            />
           ))}
       </SidebarContent>
     </Sidebar>
