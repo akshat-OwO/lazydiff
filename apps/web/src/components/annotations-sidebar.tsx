@@ -10,6 +10,7 @@ import {
   formatAnnotationsMarkdown,
 } from "@/lib/annotations";
 import type { DiffAnnotation } from "@/lib/annotations";
+import { copyTextToClipboard } from "@/lib/clipboard";
 import { cn } from "@/lib/utils";
 
 function AnnotationCard({
@@ -39,7 +40,13 @@ function AnnotationCard({
   );
 }
 
-function copyButtonLabel(copyState: "idle" | "copied" | "failed") {
+type CopyState = "idle" | "copying" | "copied" | "failed";
+
+function copyButtonLabel(copyState: CopyState) {
+  if (copyState === "copying") {
+    return "Copying…";
+  }
+
   if (copyState === "copied") {
     return "Copied";
   }
@@ -54,25 +61,30 @@ function copyButtonLabel(copyState: "idle" | "copied" | "failed") {
 function AnnotationsSidebar() {
   const annotations = useAtomValue(annotationsAtom);
   const [open, setOpen] = useAtom(annotationsSidebarOpenAtom);
-  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">(
-    "idle"
-  );
+  const [copyState, setCopyState] = useState<CopyState>("idle");
 
   if (!open) {
     return null;
   }
 
-  const copyAnnotations = async () => {
-    const markdown = formatAnnotationsMarkdown(annotations);
-
-    try {
-      await navigator.clipboard.writeText(markdown);
-      setCopyState("copied");
-      window.setTimeout(() => setCopyState("idle"), 2000);
-    } catch {
-      setCopyState("failed");
-      window.setTimeout(() => setCopyState("idle"), 2000);
+  const copyAnnotations = () => {
+    if (copyState === "copying") {
+      return;
     }
+
+    const markdown = formatAnnotationsMarkdown(annotations);
+    setCopyState("copying");
+
+    void (async () => {
+      try {
+        await copyTextToClipboard(markdown);
+        setCopyState("copied");
+      } catch {
+        setCopyState("failed");
+      }
+
+      window.setTimeout(() => setCopyState("idle"), 2000);
+    })();
   };
 
   return (
@@ -125,10 +137,8 @@ function AnnotationsSidebar() {
       <div className="border-sidebar-border border-t p-3">
         <Button
           className="w-full"
-          disabled={annotations.length === 0}
-          onClick={() => {
-            void copyAnnotations();
-          }}
+          disabled={annotations.length === 0 || copyState === "copying"}
+          onClick={copyAnnotations}
           type="button"
           variant="outline"
         >
