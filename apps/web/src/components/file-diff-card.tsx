@@ -6,7 +6,7 @@ import type {
 } from "@pierre/diffs";
 import { FileDiff } from "@pierre/diffs/react";
 import { ChevronRightIcon } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
 import { AnnotationDraftForm } from "@/components/annotation-draft-form";
@@ -22,6 +22,7 @@ import {
   annotationMatchesFileDiff,
   annotationsAtom,
   annotationsForScope,
+  applyLineSelectedUpdate,
   draftMatchesFileDiff,
   resolveAnnotationRange,
 } from "@/lib/annotations";
@@ -124,6 +125,7 @@ function FileDiffCard({
   const [selectedLines, setSelectedLines] = useState<SelectedLineRange | null>(
     null
   );
+  const dropNextLineSelectedRef = useRef(false);
   const scopedAnnotations = useMemo(
     () => annotationsForScope(annotations, scope),
     [annotations, scope]
@@ -179,13 +181,21 @@ function FileDiffCard({
         scope,
         side: anchor.side,
       });
+      // Pierre notifies onLineSelected with the committed range after this
+      // callback; drop that restore so the draft opens with selection cleared.
+      dropNextLineSelectedRef.current = true;
       setSelectedLines(null);
     },
     [fileDiff, scope, selectedLines, setDraft]
   );
 
   const onLineSelected = useCallback((range: SelectedLineRange | null) => {
-    setSelectedLines(range);
+    const next = applyLineSelectedUpdate(
+      range,
+      dropNextLineSelectedRef.current
+    );
+    dropNextLineSelectedRef.current = next.dropNext;
+    setSelectedLines(next.selectedLines);
   }, []);
 
   const options = useMemo(

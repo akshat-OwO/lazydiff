@@ -52,6 +52,24 @@ export function resolveAnnotationRange(
   return selectedLines ?? clickRange;
 }
 
+/**
+ * Pierre commits the current selection after `onGutterUtilityClick`. Drop that
+ * restore so a controlled selection cleared for the draft stays cleared.
+ */
+export function applyLineSelectedUpdate(
+  range: SelectedLineRange | null,
+  dropNext: boolean
+): {
+  readonly dropNext: boolean;
+  readonly selectedLines: SelectedLineRange | null;
+} {
+  if (dropNext) {
+    return { dropNext: false, selectedLines: null };
+  }
+
+  return { dropNext: false, selectedLines: range };
+}
+
 export function removeAnnotation(
   annotations: readonly DiffAnnotation[],
   annotationId: string

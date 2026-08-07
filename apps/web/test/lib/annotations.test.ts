@@ -11,6 +11,7 @@ import {
 import {
   annotationMatchesFileDiff,
   annotationsForScope,
+  applyLineSelectedUpdate,
   formatAnnotationsMarkdown,
   removeAnnotation,
   resolveAnnotationRange,
@@ -200,6 +201,28 @@ test("resolveAnnotationRange prefers an existing multi-line selection", () => {
     ),
     { end: 4, endSide: "additions", side: "additions", start: 2 }
   );
+});
+
+test("applyLineSelectedUpdate drops Pierre's post-gutter selection commit", () => {
+  const committed = {
+    end: 4,
+    endSide: "additions" as const,
+    side: "additions" as const,
+    start: 2,
+  };
+
+  deepStrictEqual(applyLineSelectedUpdate(committed, true), {
+    dropNext: false,
+    selectedLines: null,
+  });
+  deepStrictEqual(applyLineSelectedUpdate(committed, false), {
+    dropNext: false,
+    selectedLines: committed,
+  });
+  deepStrictEqual(applyLineSelectedUpdate(null, false), {
+    dropNext: false,
+    selectedLines: null,
+  });
 });
 
 test("removeAnnotation drops only the requested id", () => {
