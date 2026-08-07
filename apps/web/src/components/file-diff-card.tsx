@@ -58,7 +58,7 @@ function FileDiffBody({
   lineAnnotations,
   options,
   renderAnnotation,
-  selectedLines,
+  selectionResetKey,
 }: {
   readonly changeWithoutHunks: string | null;
   readonly fileDiff: FileDiffMetadata;
@@ -80,7 +80,7 @@ function FileDiffBody({
   readonly renderAnnotation: (
     annotation: DiffLineAnnotation<AnnotationMetadata>
   ) => ReactNode;
-  readonly selectedLines: SelectedLineRange | null;
+  readonly selectionResetKey: number;
 }) {
   if (changeWithoutHunks !== null) {
     return (
@@ -102,10 +102,13 @@ function FileDiffBody({
 
   return (
     <FileDiff
+      // Remount to clear Pierre's uncontrolled selection after opening a draft.
+      // Passing selectedLines would enable controlled mode, which breaks live
+      // multi-line selection rendering and commits the wrong range.
+      key={selectionResetKey}
       fileDiff={fileDiff}
       options={options}
       renderAnnotation={renderAnnotation}
-      selectedLines={selectedLines}
       {...(lineAnnotations === undefined ? {} : { lineAnnotations })}
     />
   );
@@ -121,13 +124,10 @@ function FileDiffCard({
   const scope = useAtomValue(gitChangeScopeAtom);
   const [draft, setDraft] = useAtom(annotationDraftAtom);
   const annotations = useAtomValue(annotationsAtom);
-  const [selectedLines, setSelectedLines] = useState<SelectedLineRange | null>(
-    null
-  );
+  const [selectionResetKey, setSelectionResetKey] = useState(0);
   // Pierre shrinks the utility-click range to the hovered line before invoking
   // onGutterUtilityClick. Keep the last committed selection in a ref so "+" can
-  // still annotate the full highlighted range. A stable gutter callback also
-  // avoids force-rendering the diff on every selection change.
+  // still annotate the full highlighted range.
   const committedSelectionRef = useRef<SelectedLineRange | null>(null);
   const dropNextLineSelectedRef = useRef(0);
   const scopedAnnotations = useMemo(
@@ -180,9 +180,8 @@ function FileDiffCard({
         committedSelectionRef.current
       );
       const anchor = annotationAnchorForRange(effectiveRange);
-      // Drop Pierre's follow-up onLineSelected commit (and a possible notify from
-      // syncing selectedLines=null into the controlled FileDiff).
-      dropNextLineSelectedRef.current = 2;
+      // Ignore Pierre's post-click selection commit (it reports the hovered line).
+      dropNextLineSelectedRef.current = 1;
       committedSelectionRef.current = null;
       setDraft({
         codeDiff: extractDiffSnippet(fileDiff, effectiveRange),
@@ -192,7 +191,7 @@ function FileDiffCard({
         scope,
         side: anchor.side,
       });
-      setSelectedLines(null);
+      setSelectionResetKey((key) => key + 1);
     },
     [fileDiff, scope, setDraft]
   );
@@ -200,12 +199,10 @@ function FileDiffCard({
   const onLineSelected = useCallback((range: SelectedLineRange | null) => {
     if (dropNextLineSelectedRef.current > 0) {
       dropNextLineSelectedRef.current -= 1;
-      setSelectedLines(null);
       return;
     }
 
     committedSelectionRef.current = range;
-    setSelectedLines(range);
   }, []);
 
   const options = useMemo(
@@ -317,7 +314,7 @@ function FileDiffCard({
           lineAnnotations={lineAnnotations}
           options={options}
           renderAnnotation={renderAnnotation}
-          selectedLines={selectedLines}
+          selectionResetKey={selectionResetKey}
         />
       )}
     </section>
