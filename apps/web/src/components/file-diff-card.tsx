@@ -1,17 +1,63 @@
-import type { FileDiffMetadata } from "@pierre/diffs";
+import { useAtom, useAtomValue } from "@effect/atom-react";
+import type {
+  DiffLineAnnotation,
+  FileDiffMetadata,
+  SelectedLineRange,
+} from "@pierre/diffs";
 import { FileDiff } from "@pierre/diffs/react";
 import { ChevronRightIcon } from "lucide-react";
-import { useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 
+import { AnnotationDraftForm } from "@/components/annotation-draft-form";
+import { InlineAnnotationComment } from "@/components/inline-annotation-comment";
 import { useTheme } from "@/components/theme-provider";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  annotationAnchorForRange,
+  extractDiffSnippet,
+} from "@/lib/annotation-snippet";
+import {
+  annotationDraftAtom,
+  annotationMatchesFileDiff,
+  annotationsAtom,
+  annotationsForScope,
+  draftMatchesFileDiff,
+} from "@/lib/annotations";
+import type { DiffAnnotation } from "@/lib/annotations";
 import { fileDiffAnchorId } from "@/lib/file-diff-anchor";
 import {
   countChangedLines,
   describeChangeWithoutHunks,
   describeModeChange,
 } from "@/lib/file-diff-summary";
+import { gitChangeScopeAtom } from "@/lib/rpc";
 import { cn } from "@/lib/utils";
+
+type AnnotationMetadata =
+  | {
+      readonly annotationId: string;
+      readonly kind: "saved";
+    }
+  | {
+      readonly kind: "draft";
+    };
+
+const gutterUtilityCSS = `
+[data-column-number] {
+  padding-left: calc(1lh + 1ch);
+}
+
+[data-gutter-utility-slot] {
+  left: 4px;
+  right: auto;
+  justify-content: flex-start;
+}
+
+[data-utility-button] {
+  margin-right: 0;
+}
+`;
 
 interface FileDiffCardProps {
   readonly fileDiff: FileDiffMetadata;
@@ -24,17 +70,32 @@ function FileDiffBody({
   changeWithoutHunks,
   fileDiff,
   isHighlighterReady,
+  lineAnnotations,
   options,
+  renderAnnotation,
+  selectionResetKey,
 }: {
   readonly changeWithoutHunks: string | null;
   readonly fileDiff: FileDiffMetadata;
   readonly isHighlighterReady: boolean;
+  readonly lineAnnotations:
+    | DiffLineAnnotation<AnnotationMetadata>[]
+    | undefined;
   readonly options: {
     readonly diffStyle: "unified";
     readonly disableFileHeader: true;
+    readonly enableGutterUtility: true;
+    readonly enableLineSelection: true;
+    readonly hunkSeparators: "line-info-basic";
+    readonly onGutterUtilityClick: (range: SelectedLineRange) => void;
     readonly overflow: "wrap";
     readonly themeType: "dark" | "light" | "system";
+    readonly unsafeCSS: string;
   };
+  readonly renderAnnotation: (
+    annotation: DiffLineAnnotation<AnnotationMetadata>
+  ) => ReactNode;
+  readonly selectionResetKey: number;
 }) {
   if (changeWithoutHunks !== null) {
     return (
@@ -54,7 +115,18 @@ function FileDiffBody({
     );
   }
 
-  return <FileDiff fileDiff={fileDiff} options={options} />;
+  return (
+    <FileDiff
+      // Remount to clear Pierre's uncontrolled selection after opening a draft.
+      // Passing selectedLines would enable controlled mode, which breaks live
+      // multi-line selection rendering and commits the wrong range.
+      key={selectionResetKey}
+      fileDiff={fileDiff}
+      options={options}
+      renderAnnotation={renderAnnotation}
+      {...(lineAnnotations === undefined ? {} : { lineAnnotations })}
+    />
+  );
 }
 
 function FileDiffCard({
@@ -64,6 +136,43 @@ function FileDiffCard({
   onToggle,
 }: FileDiffCardProps) {
   const { theme } = useTheme();
+  const scope = useAtomValue(gitChangeScopeAtom);
+  const [draft, setDraft] = useAtom(annotationDraftAtom);
+  const annotations = useAtomValue(annotationsAtom);
+  const [selectionResetKey, setSelectionResetKey] = useState(0);
+  const scopedAnnotations = useMemo(
+    () => annotationsForScope(annotations, scope),
+    [annotations, scope]
+  );
+  const draftForFile =
+    draft !== null &&
+    draft.scope === scope &&
+    draft.filePath === fileDiff.name &&
+    draftMatchesFileDiff(draft, fileDiff)
+      ? draft
+      : null;
+  const attachedForFile = useMemo(
+    () =>
+      scopedAnnotations.filter((annotation) =>
+        annotationMatchesFileDiff(annotation, fileDiff)
+      ),
+    [fileDiff, scopedAnnotations]
+  );
+  const annotationsById = useMemo(() => {
+    const map = new Map<
+      string,
+      { annotation: DiffAnnotation; number: number }
+    >();
+
+    for (const [index, annotation] of scopedAnnotations.entries()) {
+      map.set(annotation.id, {
+        annotation,
+        number: index + 1,
+      });
+    }
+
+    return map;
+  }, [scopedAnnotations]);
   const { additions, deletions } = useMemo(
     () => countChangedLines(fileDiff),
     [fileDiff]
@@ -73,14 +182,88 @@ function FileDiffCard({
     () => describeChangeWithoutHunks(fileDiff),
     [fileDiff]
   );
+
+  const onGutterUtilityClick = useCallback(
+    (range: SelectedLineRange) => {
+      const anchor = annotationAnchorForRange(range);
+      setDraft({
+        codeDiff: extractDiffSnippet(fileDiff, range),
+        filePath: fileDiff.name,
+        lineNumber: anchor.lineNumber,
+        range,
+        scope,
+        side: anchor.side,
+      });
+      setSelectionResetKey((key) => key + 1);
+    },
+    [fileDiff, scope, setDraft]
+  );
+
   const options = useMemo(
     () => ({
       diffStyle: "unified" as const,
       disableFileHeader: true as const,
+      enableGutterUtility: true as const,
+      enableLineSelection: true as const,
+      hunkSeparators: "line-info-basic" as const,
+      onGutterUtilityClick,
       overflow: "wrap" as const,
       themeType: theme,
+      unsafeCSS: gutterUtilityCSS,
     }),
-    [theme]
+    [onGutterUtilityClick, theme]
+  );
+
+  const lineAnnotations = useMemo(() => {
+    const next: DiffLineAnnotation<AnnotationMetadata>[] = attachedForFile.map(
+      (annotation) => {
+        const anchor = annotationAnchorForRange(annotation.range);
+
+        return {
+          lineNumber: anchor.lineNumber,
+          metadata: {
+            annotationId: annotation.id,
+            kind: "saved" as const,
+          },
+          side: anchor.side,
+        };
+      }
+    );
+
+    if (draftForFile !== null) {
+      next.push({
+        lineNumber: draftForFile.lineNumber,
+        metadata: { kind: "draft" },
+        side: draftForFile.side,
+      });
+    }
+
+    return next.length === 0 ? undefined : next;
+  }, [attachedForFile, draftForFile]);
+
+  const renderAnnotation = useCallback(
+    (annotation: DiffLineAnnotation<AnnotationMetadata>) => {
+      if (annotation.metadata.kind === "draft") {
+        return draftForFile === null ? null : (
+          <AnnotationDraftForm draft={draftForFile} />
+        );
+      }
+
+      const saved = annotationsById.get(annotation.metadata.annotationId);
+
+      if (saved === undefined) {
+        return null;
+      }
+
+      return (
+        <InlineAnnotationComment
+          annotationId={saved.annotation.id}
+          comment={saved.annotation.comment}
+          number={saved.number}
+        />
+      );
+    },
+    [annotationsById, draftForFile]
   );
 
   return (
@@ -122,7 +305,10 @@ function FileDiffCard({
           changeWithoutHunks={changeWithoutHunks}
           fileDiff={fileDiff}
           isHighlighterReady={isHighlighterReady}
+          lineAnnotations={lineAnnotations}
           options={options}
+          renderAnnotation={renderAnnotation}
+          selectionResetKey={selectionResetKey}
         />
       )}
     </section>

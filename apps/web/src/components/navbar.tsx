@@ -1,6 +1,7 @@
-import { useAtom, useAtomValue } from "@effect/atom-react";
+import { useAtom, useAtomSet, useAtomValue } from "@effect/atom-react";
 import type { GitChangeScope } from "@lazydiff/protocol";
 import { Link } from "@tanstack/react-router";
+import { MessageSquareTextIcon } from "lucide-react";
 import { useEffect } from "react";
 
 import { ModeToggle } from "@/components/mode-toggle";
@@ -14,6 +15,12 @@ import {
 } from "@/components/ui/select";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  annotationDraftAtom,
+  annotationsAtom,
+  annotationsForScope,
+  annotationsSidebarOpenAtom,
+} from "@/lib/annotations";
 import { formatLazydiffTitle } from "@/lib/app-title";
 import {
   gitBranchChangesAtom,
@@ -62,12 +69,14 @@ function GitBranchButton() {
 
 function GitChangeScopeSelect() {
   const [scope, setScope] = useAtom(gitChangeScopeAtom);
+  const setDraft = useAtomSet(annotationDraftAtom);
 
   return (
     <Select
       items={changeScopeOptions}
       onValueChange={(value) => {
         if (value !== null) {
+          setDraft(null);
           setScope(value);
         }
       }}
@@ -88,6 +97,28 @@ function GitChangeScopeSelect() {
         ))}
       </SelectContent>
     </Select>
+  );
+}
+
+function AnnotationsToggle() {
+  const scope = useAtomValue(gitChangeScopeAtom);
+  const annotations = useAtomValue(annotationsAtom);
+  const scopedCount = annotationsForScope(annotations, scope).length;
+  const [open, setOpen] = useAtom(annotationsSidebarOpenAtom);
+
+  return (
+    <Button
+      aria-label={open ? "Hide annotations" : "Show annotations"}
+      aria-pressed={open}
+      onClick={() => setOpen(!open)}
+      size="xs"
+      type="button"
+      variant={open ? "secondary" : "outline"}
+    >
+      <MessageSquareTextIcon data-icon="inline-start" />
+      Annotations
+      {scopedCount > 0 ? ` (${scopedCount})` : null}
+    </Button>
   );
 }
 
@@ -133,6 +164,7 @@ function Navbar() {
         <div className="flex items-center gap-2">
           <GitBranchButton />
           <GitChangeScopeSelect />
+          <AnnotationsToggle />
           <ModeToggle />
         </div>
       </nav>
