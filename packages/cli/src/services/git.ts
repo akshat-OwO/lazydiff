@@ -162,6 +162,8 @@ const make = (workingDirectory?: string) =>
       ["rev-parse", "--show-toplevel"],
       workingDirectory
     ).pipe(Effect.map((output) => output.trim()));
+    const repositoryName =
+      path.basename(repositoryRoot) || repositoryRoot || "repository";
     const run = Effect.fn("lazydiff/services/git/run")(
       (args: readonly string[]) => runFrom(args, repositoryRoot)
     );
@@ -402,6 +404,7 @@ const make = (workingDirectory?: string) =>
       currentBranch,
       fileStatuses,
       repositoryChanges,
+      repositoryName,
       scopeDiff,
     };
   });

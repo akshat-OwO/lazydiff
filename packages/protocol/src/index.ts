@@ -16,6 +16,8 @@ export const BrandId = Schema.Literals([
   "git.changed-files.result",
   "git.diff.subscribe",
   "git.diff.result",
+  "git.repository.get",
+  "git.repository.result",
   "git.status.get",
   "git.status.result",
   "git.status.subscribe",
@@ -119,6 +121,22 @@ export const GitDiffResult = Schema.Struct({
 
 export type GitDiffResult = typeof GitDiffResult.Type;
 
+export const GitRepositoryGet = Schema.Struct({
+  data: Schema.Struct({}),
+  type: Schema.Literal("git.repository.get"),
+});
+
+export type GitRepositoryGet = typeof GitRepositoryGet.Type;
+
+export const GitRepositoryResult = Schema.Struct({
+  data: Schema.Struct({
+    name: NonEmptyString,
+  }),
+  type: Schema.Literal("git.repository.result"),
+});
+
+export type GitRepositoryResult = typeof GitRepositoryResult.Type;
+
 export const GitStatusGet = Schema.Struct({
   data: Schema.Struct({
     branch: Schema.optional(NonEmptyString),
@@ -167,6 +185,11 @@ const GitDiffSubscribeRpc = Rpc.make("git.diff.subscribe", {
   success: GitDiffResult,
 });
 
+const GitRepositoryGetRpc = Rpc.make("git.repository.get", {
+  payload: GitRepositoryGet,
+  success: GitRepositoryResult,
+});
+
 const GitStatusGetRpc = Rpc.make("git.status.get", {
   error: GitStatusError,
   payload: GitStatusGet,
@@ -184,6 +207,7 @@ export class LazyDiffRpcs extends RpcGroup.make(
   GitBranchSubscribeRpc,
   GitChangedFilesGetRpc,
   GitDiffSubscribeRpc,
+  GitRepositoryGetRpc,
   GitStatusGetRpc,
   GitStatusSubscribeRpc
 ) {}

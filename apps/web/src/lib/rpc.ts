@@ -96,3 +96,14 @@ export const gitBranchChangesAtom = LazyDiffRpcClient.runtime.atom(
     })
   ).pipe(Stream.retry(rpcRetrySchedule))
 );
+
+export const gitRepositoryAtom = LazyDiffRpcClient.query(
+  "git.repository.get",
+  {
+    data: {},
+    type: "git.repository.get",
+  },
+  {
+    timeToLive: "Infinity",
+  }
+);
