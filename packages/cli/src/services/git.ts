@@ -20,13 +20,17 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 const maximumRetryDelay = Duration.seconds(5);
 
 /**
- * Repository configuration must not change how output is parsed: `color.ui`
- * would wrap patch headers in ANSI escapes, and `core.quotePath` would escape
- * non-ASCII pathnames in patch headers while `-z` status output keeps them raw.
+ * Repository configuration must not change how output is parsed. Colour would
+ * wrap patch headers in ANSI escapes, and `color.diff` has to be disabled
+ * alongside the general `color.ui` default because the specific key wins.
+ * `core.quotePath` would escape non-ASCII pathnames in patch headers while `-z`
+ * status output keeps them raw.
  */
 const machineReadableConfig = [
   "-c",
   "color.ui=false",
+  "-c",
+  "color.diff=false",
   "-c",
   "core.quotePath=false",
 ];

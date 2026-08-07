@@ -278,9 +278,11 @@ test("scopeDiff output is independent of repository display settings", async () 
       );
 
     yield* run(["init", "--initial-branch", "main"]);
-    // Both settings reshape Git output even when it is piped: ANSI escapes
-    // around patch headers, and octal escapes for non-ASCII pathnames.
+    // These settings reshape Git output even when it is piped: ANSI escapes
+    // around patch headers, and octal escapes for non-ASCII pathnames. The
+    // specific `color.diff` key overrides the general `color.ui` default.
     yield* run(["config", "color.ui", "always"]);
+    yield* run(["config", "color.diff", "always"]);
     yield* run(["config", "core.quotePath", "true"]);
     yield* fileSystem.writeFileString(path.join(repository, "ünïcode.txt"), "");
     yield* run(["add", "ünïcode.txt"]);
