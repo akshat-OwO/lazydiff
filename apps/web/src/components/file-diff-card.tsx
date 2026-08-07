@@ -1,4 +1,4 @@
-import { useAtom, useAtomSet } from "@effect/atom-react";
+import { useAtom, useAtomValue } from "@effect/atom-react";
 import type {
   DiffLineAnnotation,
   FileDiffMetadata,
@@ -10,16 +10,15 @@ import { useCallback, useMemo } from "react";
 import type { ReactNode } from "react";
 
 import { AnnotationDraftForm } from "@/components/annotation-draft-form";
+import { InlineAnnotationComment } from "@/components/inline-annotation-comment";
 import { useTheme } from "@/components/theme-provider";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   annotationAnchorForRange,
   extractDiffSnippet,
 } from "@/lib/annotation-snippet";
-import {
-  annotationDraftAtom,
-  annotationsSidebarOpenAtom,
-} from "@/lib/annotations";
+import { annotationDraftAtom, annotationsAtom } from "@/lib/annotations";
+import type { DiffAnnotation } from "@/lib/annotations";
 import { fileDiffAnchorId } from "@/lib/file-diff-anchor";
 import {
   countChangedLines,
@@ -28,9 +27,14 @@ import {
 } from "@/lib/file-diff-summary";
 import { cn } from "@/lib/utils";
 
-interface AnnotationMetadata {
-  readonly kind: "draft";
-}
+type AnnotationMetadata =
+  | {
+      readonly annotationId: string;
+      readonly kind: "saved";
+    }
+  | {
+      readonly kind: "draft";
+    };
 
 interface FileDiffCardProps {
   readonly fileDiff: FileDiffMetadata;
@@ -102,8 +106,22 @@ function FileDiffCard({
 }: FileDiffCardProps) {
   const { theme } = useTheme();
   const [draft, setDraft] = useAtom(annotationDraftAtom);
-  const setSidebarOpen = useAtomSet(annotationsSidebarOpenAtom);
+  const annotations = useAtomValue(annotationsAtom);
   const draftForFile = draft?.filePath === fileDiff.name ? draft : null;
+  const savedForFile = useMemo(
+    () =>
+      annotations.filter((annotation) => annotation.filePath === fileDiff.name),
+    [annotations, fileDiff.name]
+  );
+  const annotationsById = useMemo(() => {
+    const map = new Map<string, DiffAnnotation>();
+
+    for (const annotation of savedForFile) {
+      map.set(annotation.id, annotation);
+    }
+
+    return map;
+  }, [savedForFile]);
   const { additions, deletions } = useMemo(
     () => countChangedLines(fileDiff),
     [fileDiff]
@@ -124,9 +142,8 @@ function FileDiffCard({
         range,
         side: anchor.side,
       });
-      setSidebarOpen(true);
     },
-    [fileDiff, setDraft, setSidebarOpen]
+    [fileDiff, setDraft]
   );
 
   const options = useMemo(
@@ -143,28 +160,49 @@ function FileDiffCard({
   );
 
   const lineAnnotations = useMemo(() => {
-    if (draftForFile === null) {
-      return;
+    const next: DiffLineAnnotation<AnnotationMetadata>[] = savedForFile.map(
+      (annotation) => {
+        const anchor = annotationAnchorForRange(annotation.range);
+
+        return {
+          lineNumber: anchor.lineNumber,
+          metadata: {
+            annotationId: annotation.id,
+            kind: "saved" as const,
+          },
+          side: anchor.side,
+        };
+      }
+    );
+
+    if (draftForFile !== null) {
+      next.push({
+        lineNumber: draftForFile.lineNumber,
+        metadata: { kind: "draft" },
+        side: draftForFile.side,
+      });
     }
 
-    return [
-      {
-        lineNumber: draftForFile.lineNumber,
-        metadata: { kind: "draft" as const },
-        side: draftForFile.side,
-      },
-    ];
-  }, [draftForFile]);
+    return next.length === 0 ? undefined : next;
+  }, [draftForFile, savedForFile]);
 
   const renderAnnotation = useCallback(
     (annotation: DiffLineAnnotation<AnnotationMetadata>) => {
-      if (annotation.metadata.kind !== "draft" || draftForFile === null) {
+      if (annotation.metadata.kind === "draft") {
+        return draftForFile === null ? null : (
+          <AnnotationDraftForm draft={draftForFile} />
+        );
+      }
+
+      const saved = annotationsById.get(annotation.metadata.annotationId);
+
+      if (saved === undefined) {
         return null;
       }
 
-      return <AnnotationDraftForm draft={draftForFile} />;
+      return <InlineAnnotationComment comment={saved.comment} />;
     },
-    [draftForFile]
+    [annotationsById, draftForFile]
   );
 
   return (

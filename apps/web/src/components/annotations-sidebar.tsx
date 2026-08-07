@@ -2,6 +2,8 @@ import { useAtom, useAtomValue } from "@effect/atom-react";
 import { ClipboardCopyIcon, MessageSquareTextIcon, XIcon } from "lucide-react";
 import { useState } from "react";
 
+import { HighlightedCode } from "@/components/highlighted-code";
+import { TypesetMarkdown } from "@/components/typeset-markdown";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -27,14 +29,10 @@ function AnnotationCard({
         <p className="text-muted-foreground font-mono text-xs">
           {annotation.filePath}
         </p>
-        <pre className="bg-muted/50 max-h-40 overflow-auto rounded-md p-2 font-mono text-xs whitespace-pre-wrap">
-          {annotation.codeDiff.length === 0
-            ? "(no line text)"
-            : annotation.codeDiff}
-        </pre>
+        <HighlightedCode code={annotation.codeDiff} lang="diff" />
       </div>
       <div className="border-border border-t pt-3">
-        <p className="text-sm whitespace-pre-wrap">{annotation.comment}</p>
+        <TypesetMarkdown>{annotation.comment}</TypesetMarkdown>
       </div>
     </article>
   );

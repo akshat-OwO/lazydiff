@@ -76,6 +76,12 @@ importers:
       '@tailwindcss/vite':
         specifier: ^4.3.3
         version: 4.3.3(vite@8.2.0(@types/node@26.1.2)(jiti@2.7.0)(yaml@2.9.0))
+      '@tanstack/highlight':
+        specifier: ^0.0.10
+        version: 0.0.10
+      '@tanstack/markdown':
+        specifier: ^0.0.13
+        version: 0.0.13(react@19.2.8)
       '@tanstack/react-router':
         specifier: ^1.170.18
         version: 1.170.18(react@19.2.8)(react-dom@19.2.8(react@19.2.8))
@@ -1284,9 +1290,24 @@ packages:
     peerDependencies:
       vite: ^5.2.0 || ^6 || ^7 || ^8
 
+  '@tanstack/highlight@0.0.10':
+    resolution: {integrity: sha512-RNWn4BYgroDnHSdWduHVUN3hXM5OZUVwynuY2Fwh4el2hVy0woe9XZBZ5IIxC50h1y8SEYkBipS+cPgdzRc7Zg==}
+    engines: {node: '>=18'}
+
   '@tanstack/history@1.162.0':
     resolution: {integrity: sha512-79pf/RkhteYZTRgcR4F9kbk84P2N8rugQJswxfIqovlbRiT3yI7eBE+5QorIrZaOKktsgzRlXh1l/du/xpl4iA==}
     engines: {node: '>=20.19'}
+
+  '@tanstack/markdown@0.0.13':
+    resolution: {integrity: sha512-ZSQP2ulBvlPzdpZeRheBJnaELo7e4ET/D/XrfgweHyqhhLMN5vUJJAUl7ufSRd7GlfO/vwdzjKPh0E0JwqJkDA==}
+    peerDependencies:
+      octane: '>=0.1.12'
+      react: '>=18'
+    peerDependenciesMeta:
+      octane:
+        optional: true
+      react:
+        optional: true
 
   '@tanstack/react-router@1.170.18':
     resolution: {integrity: sha512-wpbGYZEp/fmz1q4bn7BD8VZ+/VZ7GBqSJv5V969pU+chP8y7dquWDmKTFMohvUegb9lg12m1uPVvD6kB2wORvQ==}
@@ -4600,7 +4621,13 @@ snapshots:
       tailwindcss: 4.3.3
       vite: 8.2.0(@types/node@26.1.2)(jiti@2.7.0)(yaml@2.9.0)
 
+  '@tanstack/highlight@0.0.10': {}
+
   '@tanstack/history@1.162.0': {}
+
+  '@tanstack/markdown@0.0.13(react@19.2.8)':
+    dependencies:
+      react: 19.2.8
 
   '@tanstack/react-router@1.170.18(react@19.2.8)(react-dom@19.2.8(react@19.2.8))':
     dependencies:

@@ -1,4 +1,4 @@
-import { useAtomSet } from "@effect/atom-react";
+import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { useEffect, useId, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -16,6 +16,7 @@ interface AnnotationDraftFormProps {
 }
 
 function AnnotationDraftForm({ draft }: AnnotationDraftFormProps) {
+  const annotations = useAtomValue(annotationsAtom);
   const setDraft = useAtomSet(annotationDraftAtom);
   const setAnnotations = useAtomSet(annotationsAtom);
   const setSidebarOpen = useAtomSet(annotationsSidebarOpenAtom);
@@ -38,8 +39,10 @@ function AnnotationDraftForm({ draft }: AnnotationDraftFormProps) {
       return;
     }
 
-    setAnnotations((annotations) => [
-      ...annotations,
+    const isFirstAnnotation = annotations.length === 0;
+
+    setAnnotations((current) => [
+      ...current,
       {
         codeDiff: draft.codeDiff,
         comment: trimmed,
@@ -49,7 +52,10 @@ function AnnotationDraftForm({ draft }: AnnotationDraftFormProps) {
       },
     ]);
     setDraft(null);
-    setSidebarOpen(true);
+
+    if (isFirstAnnotation) {
+      setSidebarOpen(true);
+    }
   };
 
   return (
@@ -62,9 +68,6 @@ function AnnotationDraftForm({ draft }: AnnotationDraftFormProps) {
         saveAnnotation();
       }}
     >
-      <pre className="bg-muted/50 text-muted-foreground max-h-32 overflow-auto rounded-md p-2 font-mono text-xs whitespace-pre-wrap">
-        {draft.codeDiff.length === 0 ? "(no line text)" : draft.codeDiff}
-      </pre>
       <Textarea
         aria-label="Annotation comment"
         onChange={(event) => setComment(event.target.value)}

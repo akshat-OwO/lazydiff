@@ -2,8 +2,28 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
+@import "./typeset.css";
 
 @custom-variant dark (&:is(.dark *));
+
+.typeset-annotation {
+  --typeset-size: 0.875rem;
+  --typeset-leading: 1.55;
+  --typeset-flow: 0.75em;
+}
+
+.annotation-code .th-code {
+  margin: 0;
+  max-height: 10rem;
+  overflow: auto;
+  border-radius: var(--radius-md);
+  background: var(--th-background);
+  padding: 0.5rem;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.75rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
 
 @theme inline {
   --font-heading: var(--font-sans);
