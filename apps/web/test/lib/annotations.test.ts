@@ -8,7 +8,11 @@ import {
   annotationAnchorForRange,
   extractDiffSnippet,
 } from "../../src/lib/annotation-snippet.ts";
-import { formatAnnotationsMarkdown } from "../../src/lib/annotations.ts";
+import {
+  annotationMatchesFileDiff,
+  annotationsForScope,
+  formatAnnotationsMarkdown,
+} from "../../src/lib/annotations.ts";
 import type { DiffAnnotation } from "../../src/lib/annotations.ts";
 
 const parseSingleFile = (patch: string): FileDiffMetadata => {
@@ -29,6 +33,19 @@ index 5626abf..f719efd 100644
  kept
 -one
 +two
+ context
++added
+ more
+`;
+
+const replacedAdditionPatch = `diff --git a/a.txt b/a.txt
+index 5626abf..aaaaaaa 100644
+--- a/a.txt
++++ b/a.txt
+@@ -1,4 +1,5 @@
+ kept
+-one
++three
  context
 +added
  more
@@ -93,6 +110,7 @@ test("formatAnnotationsMarkdown quotes the chosen code for agents", () => {
       filePath: "a.txt",
       id: "1",
       range: { end: 4, side: "additions", start: 2 },
+      scope: "unstaged",
     },
     {
       codeDiff: "-one",
@@ -100,6 +118,7 @@ test("formatAnnotationsMarkdown quotes the chosen code for agents", () => {
       filePath: "a.txt",
       id: "2",
       range: { end: 2, side: "deletions", start: 2 },
+      scope: "unstaged",
     },
   ];
 
@@ -118,4 +137,55 @@ Prefer clearer names here.
 
 Why was this removed?`
   );
+});
+
+test("annotationsForScope keeps change scopes partitioned", () => {
+  const annotations: readonly DiffAnnotation[] = [
+    {
+      codeDiff: "+two",
+      comment: "unstaged note",
+      filePath: "a.txt",
+      id: "1",
+      range: { end: 2, side: "additions", start: 2 },
+      scope: "unstaged",
+    },
+    {
+      codeDiff: "+two",
+      comment: "staged note",
+      filePath: "a.txt",
+      id: "2",
+      range: { end: 2, side: "additions", start: 2 },
+      scope: "staged",
+    },
+  ];
+
+  deepStrictEqual(
+    annotationsForScope(annotations, "unstaged").map(({ id }) => id),
+    ["1"]
+  );
+  deepStrictEqual(
+    annotationsForScope(annotations, "staged").map(({ id }) => id),
+    ["2"]
+  );
+});
+
+test("annotationMatchesFileDiff rejects a replacement line at the same coordinates", () => {
+  const originalDiff = parseSingleFile(textPatch);
+  const replacedDiff = parseSingleFile(replacedAdditionPatch);
+  const annotation: DiffAnnotation = {
+    codeDiff: extractDiffSnippet(originalDiff, {
+      end: 2,
+      side: "additions",
+      start: 2,
+    }),
+    comment: "About the old addition",
+    filePath: "a.txt",
+    id: "1",
+    range: { end: 2, side: "additions", start: 2 },
+    scope: "unstaged",
+  };
+
+  strictEqual(annotationMatchesFileDiff(annotation, originalDiff), true);
+  strictEqual(annotationMatchesFileDiff(annotation, replacedDiff), false);
+  strictEqual(extractDiffSnippet(replacedDiff, annotation.range), "+three");
 });

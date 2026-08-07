@@ -1,4 +1,4 @@
-import { useAtom, useAtomValue } from "@effect/atom-react";
+import { useAtom, useAtomSet, useAtomValue } from "@effect/atom-react";
 import type { GitChangeScope } from "@lazydiff/protocol";
 import { Link } from "@tanstack/react-router";
 import { MessageSquareTextIcon } from "lucide-react";
@@ -14,7 +14,12 @@ import {
 } from "@/components/ui/select";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Skeleton } from "@/components/ui/skeleton";
-import { annotationsAtom, annotationsSidebarOpenAtom } from "@/lib/annotations";
+import {
+  annotationDraftAtom,
+  annotationsAtom,
+  annotationsForScope,
+  annotationsSidebarOpenAtom,
+} from "@/lib/annotations";
 import { gitBranchChangesAtom, gitChangeScopeAtom } from "@/lib/rpc";
 
 const changeScopeOptions: readonly {
@@ -58,12 +63,14 @@ function GitBranchButton() {
 
 function GitChangeScopeSelect() {
   const [scope, setScope] = useAtom(gitChangeScopeAtom);
+  const setDraft = useAtomSet(annotationDraftAtom);
 
   return (
     <Select
       items={changeScopeOptions}
       onValueChange={(value) => {
         if (value !== null) {
+          setDraft(null);
           setScope(value);
         }
       }}
@@ -88,7 +95,9 @@ function GitChangeScopeSelect() {
 }
 
 function AnnotationsToggle() {
+  const scope = useAtomValue(gitChangeScopeAtom);
   const annotations = useAtomValue(annotationsAtom);
+  const scopedCount = annotationsForScope(annotations, scope).length;
   const [open, setOpen] = useAtom(annotationsSidebarOpenAtom);
 
   return (
@@ -102,7 +111,7 @@ function AnnotationsToggle() {
     >
       <MessageSquareTextIcon data-icon="inline-start" />
       Annotations
-      {annotations.length > 0 ? ` (${annotations.length})` : null}
+      {scopedCount > 0 ? ` (${scopedCount})` : null}
     </Button>
   );
 }

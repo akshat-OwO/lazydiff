@@ -17,7 +17,13 @@ import {
   annotationAnchorForRange,
   extractDiffSnippet,
 } from "@/lib/annotation-snippet";
-import { annotationDraftAtom, annotationsAtom } from "@/lib/annotations";
+import {
+  annotationDraftAtom,
+  annotationMatchesFileDiff,
+  annotationsAtom,
+  annotationsForScope,
+  draftMatchesFileDiff,
+} from "@/lib/annotations";
 import type { DiffAnnotation } from "@/lib/annotations";
 import { fileDiffAnchorId } from "@/lib/file-diff-anchor";
 import {
@@ -25,6 +31,7 @@ import {
   describeChangeWithoutHunks,
   describeModeChange,
 } from "@/lib/file-diff-summary";
+import { gitChangeScopeAtom } from "@/lib/rpc";
 import { cn } from "@/lib/utils";
 
 type AnnotationMetadata =
@@ -105,13 +112,26 @@ function FileDiffCard({
   onToggle,
 }: FileDiffCardProps) {
   const { theme } = useTheme();
+  const scope = useAtomValue(gitChangeScopeAtom);
   const [draft, setDraft] = useAtom(annotationDraftAtom);
   const annotations = useAtomValue(annotationsAtom);
-  const draftForFile = draft?.filePath === fileDiff.name ? draft : null;
-  const savedForFile = useMemo(
+  const scopedAnnotations = useMemo(
+    () => annotationsForScope(annotations, scope),
+    [annotations, scope]
+  );
+  const draftForFile =
+    draft !== null &&
+    draft.scope === scope &&
+    draft.filePath === fileDiff.name &&
+    draftMatchesFileDiff(draft, fileDiff)
+      ? draft
+      : null;
+  const attachedForFile = useMemo(
     () =>
-      annotations.filter((annotation) => annotation.filePath === fileDiff.name),
-    [annotations, fileDiff.name]
+      scopedAnnotations.filter((annotation) =>
+        annotationMatchesFileDiff(annotation, fileDiff)
+      ),
+    [fileDiff, scopedAnnotations]
   );
   const annotationsById = useMemo(() => {
     const map = new Map<
@@ -119,7 +139,7 @@ function FileDiffCard({
       { annotation: DiffAnnotation; number: number }
     >();
 
-    for (const [index, annotation] of annotations.entries()) {
+    for (const [index, annotation] of scopedAnnotations.entries()) {
       map.set(annotation.id, {
         annotation,
         number: index + 1,
@@ -127,7 +147,7 @@ function FileDiffCard({
     }
 
     return map;
-  }, [annotations]);
+  }, [scopedAnnotations]);
   const { additions, deletions } = useMemo(
     () => countChangedLines(fileDiff),
     [fileDiff]
@@ -146,10 +166,11 @@ function FileDiffCard({
         filePath: fileDiff.name,
         lineNumber: anchor.lineNumber,
         range,
+        scope,
         side: anchor.side,
       });
     },
-    [fileDiff, setDraft]
+    [fileDiff, scope, setDraft]
   );
 
   const options = useMemo(
@@ -166,7 +187,7 @@ function FileDiffCard({
   );
 
   const lineAnnotations = useMemo(() => {
-    const next: DiffLineAnnotation<AnnotationMetadata>[] = savedForFile.map(
+    const next: DiffLineAnnotation<AnnotationMetadata>[] = attachedForFile.map(
       (annotation) => {
         const anchor = annotationAnchorForRange(annotation.range);
 
@@ -190,7 +211,7 @@ function FileDiffCard({
     }
 
     return next.length === 0 ? undefined : next;
-  }, [draftForFile, savedForFile]);
+  }, [attachedForFile, draftForFile]);
 
   const renderAnnotation = useCallback(
     (annotation: DiffLineAnnotation<AnnotationMetadata>) => {

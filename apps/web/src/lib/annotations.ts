@@ -1,5 +1,12 @@
-import type { AnnotationSide, SelectedLineRange } from "@pierre/diffs";
+import type { GitChangeScope } from "@lazydiff/protocol";
+import type {
+  AnnotationSide,
+  FileDiffMetadata,
+  SelectedLineRange,
+} from "@pierre/diffs";
 import { Atom } from "effect/unstable/reactivity";
+
+import { extractDiffSnippet } from "./annotation-snippet.ts";
 
 export interface DiffAnnotation {
   readonly codeDiff: string;
@@ -7,6 +14,7 @@ export interface DiffAnnotation {
   readonly filePath: string;
   readonly id: string;
   readonly range: SelectedLineRange;
+  readonly scope: GitChangeScope;
 }
 
 export interface AnnotationDraft {
@@ -14,6 +22,7 @@ export interface AnnotationDraft {
   readonly filePath: string;
   readonly lineNumber: number;
   readonly range: SelectedLineRange;
+  readonly scope: GitChangeScope;
   readonly side: AnnotationSide;
 }
 
@@ -25,6 +34,38 @@ export const annotationsSidebarOpenAtom = Atom.make(false);
 
 export function createAnnotationId(): string {
   return crypto.randomUUID();
+}
+
+/**
+ * Annotations belong to the change scope they were created in, so switching
+ * Unstaged/Staged/Committed never projects comments onto another dataset.
+ */
+export function annotationsForScope(
+  annotations: readonly DiffAnnotation[],
+  scope: GitChangeScope
+): readonly DiffAnnotation[] {
+  return annotations.filter((annotation) => annotation.scope === scope);
+}
+
+/**
+ * Only attach an annotation to the live diff when the chosen snippet is still
+ * present at its saved coordinates. Otherwise keep it orphaned in the sidebar.
+ */
+export function annotationMatchesFileDiff(
+  annotation: Pick<DiffAnnotation, "codeDiff" | "filePath" | "range">,
+  fileDiff: FileDiffMetadata
+): boolean {
+  return (
+    annotation.filePath === fileDiff.name &&
+    extractDiffSnippet(fileDiff, annotation.range) === annotation.codeDiff
+  );
+}
+
+export function draftMatchesFileDiff(
+  draft: Pick<AnnotationDraft, "codeDiff" | "filePath" | "range">,
+  fileDiff: FileDiffMetadata
+): boolean {
+  return annotationMatchesFileDiff(draft, fileDiff);
 }
 
 const quoteDiffLines = (codeDiff: string) =>

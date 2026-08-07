@@ -6,16 +6,19 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   annotationDraftAtom,
   annotationsAtom,
+  annotationsForScope,
   annotationsSidebarOpenAtom,
   createAnnotationId,
 } from "@/lib/annotations";
 import type { AnnotationDraft } from "@/lib/annotations";
+import { gitChangeScopeAtom } from "@/lib/rpc";
 
 interface AnnotationDraftFormProps {
   readonly draft: AnnotationDraft;
 }
 
 function AnnotationDraftForm({ draft }: AnnotationDraftFormProps) {
+  const scope = useAtomValue(gitChangeScopeAtom);
   const annotations = useAtomValue(annotationsAtom);
   const setDraft = useAtomSet(annotationDraftAtom);
   const setAnnotations = useAtomSet(annotationsAtom);
@@ -23,6 +26,7 @@ function AnnotationDraftForm({ draft }: AnnotationDraftFormProps) {
   const [comment, setComment] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const formId = useId();
+  const scopedCount = annotationsForScope(annotations, scope).length;
 
   useEffect(() => {
     textareaRef.current?.focus();
@@ -39,7 +43,7 @@ function AnnotationDraftForm({ draft }: AnnotationDraftFormProps) {
       return;
     }
 
-    const isFirstAnnotation = annotations.length === 0;
+    const isFirstAnnotation = scopedCount === 0;
 
     setAnnotations((current) => [
       ...current,
@@ -49,6 +53,7 @@ function AnnotationDraftForm({ draft }: AnnotationDraftFormProps) {
         filePath: draft.filePath,
         id: createAnnotationId(),
         range: draft.range,
+        scope: draft.scope,
       },
     ]);
     setDraft(null);

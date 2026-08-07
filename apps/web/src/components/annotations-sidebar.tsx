@@ -8,11 +8,13 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   annotationsAtom,
+  annotationsForScope,
   annotationsSidebarOpenAtom,
   formatAnnotationsMarkdown,
 } from "@/lib/annotations";
 import type { DiffAnnotation } from "@/lib/annotations";
 import { copyTextToClipboard } from "@/lib/clipboard";
+import { gitChangeScopeAtom } from "@/lib/rpc";
 import { cn } from "@/lib/utils";
 
 function AnnotationCard({
@@ -57,7 +59,9 @@ function copyButtonLabel(copyState: CopyState) {
 }
 
 function AnnotationsSidebar() {
-  const annotations = useAtomValue(annotationsAtom);
+  const scope = useAtomValue(gitChangeScopeAtom);
+  const allAnnotations = useAtomValue(annotationsAtom);
+  const annotations = annotationsForScope(allAnnotations, scope);
   const [open, setOpen] = useAtom(annotationsSidebarOpenAtom);
   const [copyState, setCopyState] = useState<CopyState>("idle");
 
