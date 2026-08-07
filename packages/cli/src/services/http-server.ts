@@ -12,14 +12,14 @@ const webRoot = fileURLToPath(
 );
 
 export interface HttpServerOptions {
-  readonly allowedOrigin: string;
+  readonly allowedOrigins: ReadonlySet<string>;
   readonly host: string;
   readonly port: number;
   readonly serveWebUi: boolean;
 }
 
 export const makeHttpServerLayer = ({
-  allowedOrigin,
+  allowedOrigins,
   host,
   port,
   serveWebUi,
@@ -32,7 +32,7 @@ export const makeHttpServerLayer = ({
     : Layer.empty;
 
   const RoutesLive = Layer.merge(
-    makeRpcRoutes({ allowedOrigin }),
+    makeRpcRoutes({ allowedOrigins }),
     WebRoutesLive
   );
 

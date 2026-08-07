@@ -6,7 +6,7 @@ import type {
 } from "@pierre/diffs";
 import { FileDiff } from "@pierre/diffs/react";
 import { ChevronRightIcon } from "lucide-react";
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
 import { AnnotationDraftForm } from "@/components/annotation-draft-form";
@@ -23,6 +23,7 @@ import {
   annotationsAtom,
   annotationsForScope,
   draftMatchesFileDiff,
+  resolveAnnotationRange,
 } from "@/lib/annotations";
 import type { DiffAnnotation } from "@/lib/annotations";
 import { fileDiffAnchorId } from "@/lib/file-diff-anchor";
@@ -57,6 +58,7 @@ function FileDiffBody({
   lineAnnotations,
   options,
   renderAnnotation,
+  selectedLines,
 }: {
   readonly changeWithoutHunks: string | null;
   readonly fileDiff: FileDiffMetadata;
@@ -68,14 +70,17 @@ function FileDiffBody({
     readonly diffStyle: "unified";
     readonly disableFileHeader: true;
     readonly enableGutterUtility: true;
+    readonly enableLineSelection: true;
     readonly hunkSeparators: "line-info-basic";
     readonly onGutterUtilityClick: (range: SelectedLineRange) => void;
+    readonly onLineSelected: (range: SelectedLineRange | null) => void;
     readonly overflow: "wrap";
     readonly themeType: "dark" | "light" | "system";
   };
   readonly renderAnnotation: (
     annotation: DiffLineAnnotation<AnnotationMetadata>
   ) => ReactNode;
+  readonly selectedLines: SelectedLineRange | null;
 }) {
   if (changeWithoutHunks !== null) {
     return (
@@ -100,6 +105,7 @@ function FileDiffBody({
       fileDiff={fileDiff}
       options={options}
       renderAnnotation={renderAnnotation}
+      selectedLines={selectedLines}
       {...(lineAnnotations === undefined ? {} : { lineAnnotations })}
     />
   );
@@ -115,6 +121,9 @@ function FileDiffCard({
   const scope = useAtomValue(gitChangeScopeAtom);
   const [draft, setDraft] = useAtom(annotationDraftAtom);
   const annotations = useAtomValue(annotationsAtom);
+  const [selectedLines, setSelectedLines] = useState<SelectedLineRange | null>(
+    null
+  );
   const scopedAnnotations = useMemo(
     () => annotationsForScope(annotations, scope),
     [annotations, scope]
@@ -160,30 +169,38 @@ function FileDiffCard({
 
   const onGutterUtilityClick = useCallback(
     (range: SelectedLineRange) => {
-      const anchor = annotationAnchorForRange(range);
+      const effectiveRange = resolveAnnotationRange(range, selectedLines);
+      const anchor = annotationAnchorForRange(effectiveRange);
       setDraft({
-        codeDiff: extractDiffSnippet(fileDiff, range),
+        codeDiff: extractDiffSnippet(fileDiff, effectiveRange),
         filePath: fileDiff.name,
         lineNumber: anchor.lineNumber,
-        range,
+        range: effectiveRange,
         scope,
         side: anchor.side,
       });
+      setSelectedLines(null);
     },
-    [fileDiff, scope, setDraft]
+    [fileDiff, scope, selectedLines, setDraft]
   );
+
+  const onLineSelected = useCallback((range: SelectedLineRange | null) => {
+    setSelectedLines(range);
+  }, []);
 
   const options = useMemo(
     () => ({
       diffStyle: "unified" as const,
       disableFileHeader: true as const,
       enableGutterUtility: true as const,
+      enableLineSelection: true as const,
       hunkSeparators: "line-info-basic" as const,
       onGutterUtilityClick,
+      onLineSelected,
       overflow: "wrap" as const,
       themeType: theme,
     }),
-    [onGutterUtilityClick, theme]
+    [onGutterUtilityClick, onLineSelected, theme]
   );
 
   const lineAnnotations = useMemo(() => {
@@ -229,6 +246,7 @@ function FileDiffCard({
 
       return (
         <InlineAnnotationComment
+          annotationId={saved.annotation.id}
           comment={saved.annotation.comment}
           number={saved.number}
         />
@@ -279,6 +297,7 @@ function FileDiffCard({
           lineAnnotations={lineAnnotations}
           options={options}
           renderAnnotation={renderAnnotation}
+          selectedLines={selectedLines}
         />
       )}
     </section>

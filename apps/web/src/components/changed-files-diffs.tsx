@@ -1,4 +1,4 @@
-import { useAtomValue } from "@effect/atom-react";
+import { useAtom, useAtomValue } from "@effect/atom-react";
 import { parsePatchFiles } from "@pierre/diffs";
 import type { FileDiffMetadata } from "@pierre/diffs";
 import { useLocation } from "@tanstack/react-router";
@@ -16,7 +16,12 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
-import { fileDiffAnchorId, fromLocationHash } from "@/lib/file-diff-anchor";
+import { annotationFocusAtom } from "@/lib/annotations";
+import {
+  annotationInlineAnchorId,
+  fileDiffAnchorId,
+  fromLocationHash,
+} from "@/lib/file-diff-anchor";
 import { unquoteGitPath } from "@/lib/git-path";
 import { preloadFileDiffHighlighter } from "@/lib/preload-file-diff-highlighter";
 import { gitDiffAtom } from "@/lib/rpc";
@@ -41,6 +46,7 @@ type HighlighterPreloadState =
 
 function ChangedFilesDiffs() {
   const gitDiff = useAtomValue(gitDiffAtom);
+  const [annotationFocus, setAnnotationFocus] = useAtom(annotationFocusAtom);
   const selectedPath = useLocation({
     select: (location) => fromLocationHash(location.hash),
   });
@@ -137,14 +143,47 @@ function ChangedFilesDiffs() {
     }
 
     scrolledPath.current = selectedPath;
-    anchor.scrollIntoView({ behavior: "smooth", block: "start" });
+    anchor.scrollIntoView({ behavior: "instant", block: "start" });
   }, [isHighlighterReady, selectedPath]);
+
+  useEffect(() => {
+    if (annotationFocus === null || !isHighlighterReady) {
+      return;
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      const anchor = document.querySelector(
+        `#${CSS.escape(annotationInlineAnchorId(annotationFocus.annotationId))}`
+      );
+
+      if (anchor instanceof HTMLElement) {
+        anchor.scrollIntoView({ behavior: "instant", block: "center" });
+      }
+
+      setAnnotationFocus(null);
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+    };
+  }, [annotationFocus, isHighlighterReady, setAnnotationFocus]);
 
   const toggleCollapsed = useCallback((path: string) => {
     setCollapsedPaths((paths) =>
       paths.has(path) ? withoutPath(paths, path) : new Set(paths).add(path)
     );
   }, []);
+
+  const isPathCollapsed = useCallback(
+    (path: string) => {
+      if (annotationFocus?.filePath === path) {
+        return false;
+      }
+
+      return collapsedPaths.has(path);
+    },
+    [annotationFocus, collapsedPaths]
+  );
 
   const retryHighlighterPreload = useCallback(() => {
     setPreloadAttempt((attempt) => attempt + 1);
@@ -217,7 +256,7 @@ function ChangedFilesDiffs() {
       {fileDiffs.map((fileDiff) => (
         <FileDiffCard
           fileDiff={fileDiff}
-          isCollapsed={collapsedPaths.has(fileDiff.name)}
+          isCollapsed={isPathCollapsed(fileDiff.name)}
           isHighlighterReady={isHighlighterReady}
           key={fileDiff.name}
           onToggle={toggleCollapsed}

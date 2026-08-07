@@ -12,6 +12,8 @@ import {
   annotationMatchesFileDiff,
   annotationsForScope,
   formatAnnotationsMarkdown,
+  removeAnnotation,
+  resolveAnnotationRange,
 } from "../../src/lib/annotations.ts";
 import type { DiffAnnotation } from "../../src/lib/annotations.ts";
 
@@ -188,4 +190,40 @@ test("annotationMatchesFileDiff rejects a replacement line at the same coordinat
   strictEqual(annotationMatchesFileDiff(annotation, originalDiff), true);
   strictEqual(annotationMatchesFileDiff(annotation, replacedDiff), false);
   strictEqual(extractDiffSnippet(replacedDiff, annotation.range), "+three");
+});
+
+test("resolveAnnotationRange prefers an existing multi-line selection", () => {
+  deepStrictEqual(
+    resolveAnnotationRange(
+      { end: 2, side: "additions", start: 2 },
+      { end: 4, endSide: "additions", side: "additions", start: 2 }
+    ),
+    { end: 4, endSide: "additions", side: "additions", start: 2 }
+  );
+});
+
+test("removeAnnotation drops only the requested id", () => {
+  const annotations: readonly DiffAnnotation[] = [
+    {
+      codeDiff: "+two",
+      comment: "first",
+      filePath: "a.txt",
+      id: "1",
+      range: { end: 2, side: "additions", start: 2 },
+      scope: "unstaged",
+    },
+    {
+      codeDiff: "+added",
+      comment: "second",
+      filePath: "a.txt",
+      id: "2",
+      range: { end: 4, side: "additions", start: 4 },
+      scope: "unstaged",
+    },
+  ];
+
+  deepStrictEqual(
+    removeAnnotation(annotations, "1").map(({ id }) => id),
+    ["2"]
+  );
 });

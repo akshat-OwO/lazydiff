@@ -2,6 +2,7 @@ import { useAtom, useAtomSet, useAtomValue } from "@effect/atom-react";
 import type { GitChangeScope } from "@lazydiff/protocol";
 import { Link } from "@tanstack/react-router";
 import { MessageSquareTextIcon } from "lucide-react";
+import { useEffect } from "react";
 
 import { ModeToggle } from "@/components/mode-toggle";
 import { Button } from "@/components/ui/button";
@@ -20,7 +21,12 @@ import {
   annotationsForScope,
   annotationsSidebarOpenAtom,
 } from "@/lib/annotations";
-import { gitBranchChangesAtom, gitChangeScopeAtom } from "@/lib/rpc";
+import { formatLazydiffTitle } from "@/lib/app-title";
+import {
+  gitBranchChangesAtom,
+  gitChangeScopeAtom,
+  gitRepositoryAtom,
+} from "@/lib/rpc";
 
 const changeScopeOptions: readonly {
   readonly label: string;
@@ -116,6 +122,34 @@ function AnnotationsToggle() {
   );
 }
 
+function BrandTitle() {
+  const repository = useAtomValue(gitRepositoryAtom);
+  const repositoryName =
+    repository._tag === "Success" ? repository.value.data.name : undefined;
+  const title = formatLazydiffTitle(repositoryName);
+
+  useEffect(() => {
+    document.title = title;
+  }, [title]);
+
+  if (repository._tag === "Initial") {
+    return (
+      <output aria-label="Loading repository name">
+        <Skeleton className="h-6 w-36" />
+      </output>
+    );
+  }
+
+  return (
+    <Link
+      className="text-lg font-semibold tracking-tight transition-opacity hover:opacity-80"
+      to="/"
+    >
+      {title}
+    </Link>
+  );
+}
+
 function Navbar() {
   return (
     <header className="bg-sidebar text-sidebar-foreground border-sidebar-border sticky top-0 z-40 border-b">
@@ -125,12 +159,7 @@ function Navbar() {
       >
         <div className="flex items-center gap-2">
           <SidebarTrigger />
-          <Link
-            className="text-lg font-semibold tracking-tight transition-opacity hover:opacity-80"
-            to="/"
-          >
-            Lazydiff
-          </Link>
+          <BrandTitle />
         </div>
         <div className="flex items-center gap-2">
           <GitBranchButton />

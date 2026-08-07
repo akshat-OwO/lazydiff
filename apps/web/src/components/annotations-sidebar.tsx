@@ -1,5 +1,11 @@
-import { useAtom, useAtomValue } from "@effect/atom-react";
-import { ClipboardCopyIcon, MessageSquareTextIcon, XIcon } from "lucide-react";
+import { useAtom, useAtomSet, useAtomValue } from "@effect/atom-react";
+import {
+  ClipboardCopyIcon,
+  LinkIcon,
+  MessageSquareTextIcon,
+  Trash2Icon,
+  XIcon,
+} from "lucide-react";
 import { useState } from "react";
 
 import { HighlightedCode } from "@/components/highlighted-code";
@@ -7,10 +13,12 @@ import { TypesetMarkdown } from "@/components/typeset-markdown";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
+  annotationFocusAtom,
   annotationsAtom,
   annotationsForScope,
   annotationsSidebarOpenAtom,
   formatAnnotationsMarkdown,
+  removeAnnotation,
 } from "@/lib/annotations";
 import type { DiffAnnotation } from "@/lib/annotations";
 import { copyTextToClipboard } from "@/lib/clipboard";
@@ -20,13 +28,39 @@ import { cn } from "@/lib/utils";
 function AnnotationCard({
   annotation,
   index,
+  onDelete,
+  onLink,
 }: {
   readonly annotation: DiffAnnotation;
   readonly index: number;
+  readonly onDelete: (annotationId: string) => void;
+  readonly onLink: (annotation: DiffAnnotation) => void;
 }) {
   return (
     <article className="border-border space-y-3 border-b px-4 py-4">
-      <h3 className="text-sm font-semibold">Annotation {index + 1}</h3>
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold">Annotation {index + 1}</h3>
+        <div className="flex items-center gap-0.5">
+          <Button
+            aria-label={`Go to annotation ${index + 1}`}
+            onClick={() => onLink(annotation)}
+            size="icon-xs"
+            type="button"
+            variant="ghost"
+          >
+            <LinkIcon />
+          </Button>
+          <Button
+            aria-label={`Delete annotation ${index + 1}`}
+            onClick={() => onDelete(annotation.id)}
+            size="icon-xs"
+            type="button"
+            variant="ghost"
+          >
+            <Trash2Icon />
+          </Button>
+        </div>
+      </div>
       <div className="border-border space-y-2 border-t pt-3">
         <p className="text-muted-foreground font-mono text-xs">
           {annotation.filePath}
@@ -61,6 +95,8 @@ function copyButtonLabel(copyState: CopyState) {
 function AnnotationsSidebar() {
   const scope = useAtomValue(gitChangeScopeAtom);
   const allAnnotations = useAtomValue(annotationsAtom);
+  const setAnnotations = useAtomSet(annotationsAtom);
+  const setFocus = useAtomSet(annotationFocusAtom);
   const annotations = annotationsForScope(allAnnotations, scope);
   const [open, setOpen] = useAtom(annotationsSidebarOpenAtom);
   const [copyState, setCopyState] = useState<CopyState>("idle");
@@ -87,6 +123,17 @@ function AnnotationsSidebar() {
 
       window.setTimeout(() => setCopyState("idle"), 2000);
     })();
+  };
+
+  const deleteAnnotation = (annotationId: string) => {
+    setAnnotations((current) => removeAnnotation(current, annotationId));
+  };
+
+  const linkToAnnotation = (annotation: DiffAnnotation) => {
+    setFocus({
+      annotationId: annotation.id,
+      filePath: annotation.filePath,
+    });
   };
 
   return (
@@ -131,6 +178,8 @@ function AnnotationsSidebar() {
               annotation={annotation}
               index={index}
               key={annotation.id}
+              onDelete={deleteAnnotation}
+              onLink={linkToAnnotation}
             />
           ))
         )}

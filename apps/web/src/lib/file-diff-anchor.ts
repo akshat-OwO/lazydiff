@@ -6,6 +6,10 @@ export function fileDiffAnchorId(path: string) {
   return `file-diff:${path}`;
 }
 
+export function annotationInlineAnchorId(annotationId: string) {
+  return `annotation:${annotationId}`;
+}
+
 export function toLocationHash(path: string) {
   return encodeURIComponent(path);
 }

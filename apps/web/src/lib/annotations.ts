@@ -32,8 +32,31 @@ export const annotationDraftAtom = Atom.make<AnnotationDraft | null>(null);
 
 export const annotationsSidebarOpenAtom = Atom.make(false);
 
+export const annotationFocusAtom = Atom.make<{
+  readonly annotationId: string;
+  readonly filePath: string;
+} | null>(null);
+
 export function createAnnotationId(): string {
   return crypto.randomUUID();
+}
+
+/**
+ * Prefer an existing multi-line selection when the user clicks +, so the draft
+ * covers the whole highlighted range instead of only the clicked line.
+ */
+export function resolveAnnotationRange(
+  clickRange: SelectedLineRange,
+  selectedLines: SelectedLineRange | null
+): SelectedLineRange {
+  return selectedLines ?? clickRange;
+}
+
+export function removeAnnotation(
+  annotations: readonly DiffAnnotation[],
+  annotationId: string
+): readonly DiffAnnotation[] {
+  return annotations.filter((annotation) => annotation.id !== annotationId);
 }
 
 /**
