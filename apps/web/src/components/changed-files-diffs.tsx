@@ -1,5 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import { parsePatchFiles } from "@pierre/diffs";
+import type { FileDiffMetadata } from "@pierre/diffs";
 import { useLocation } from "@tanstack/react-router";
 import { FileDiffIcon, FileWarningIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -15,6 +16,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { fileDiffAnchorId, fromLocationHash } from "@/lib/file-diff-anchor";
 import { unquoteGitPath } from "@/lib/git-path";
+import { preloadFileDiffHighlighter } from "@/lib/preload-file-diff-highlighter";
 import { gitDiffAtom } from "@/lib/rpc";
 
 const withoutPath = (paths: ReadonlySet<string>, path: string) => {
@@ -52,17 +54,42 @@ function ChangedFilesDiffs() {
             .toSorted((left, right) => left.name.localeCompare(right.name)),
     [patch]
   );
+  const [readyFileDiffs, setReadyFileDiffs] = useState<
+    readonly FileDiffMetadata[] | null
+  >(null);
+  const isHighlighterReady = readyFileDiffs === fileDiffs;
   const scrolledPath = useRef<string | null>(null);
 
-  // Scroll once per selection: the diffs re-render whenever the repository
-  // changes, which must not drag the reader back to the selected file.
+  useEffect(() => {
+    if (fileDiffs.length === 0) {
+      return;
+    }
+
+    let cancelled = false;
+
+    void (async () => {
+      await preloadFileDiffHighlighter(fileDiffs);
+      if (!cancelled) {
+        setReadyFileDiffs(fileDiffs);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [fileDiffs]);
+
+  // Scroll once per selection after real diff heights are in the DOM. Skeletons
+  // are short, so scrolling earlier lands on the wrong place once FileDiff
+  // mounts. Repository refreshes keep the same selection and must not yank
+  // the reader back to that file.
   useEffect(() => {
     if (selectedPath === null) {
       scrolledPath.current = null;
       return;
     }
 
-    if (scrolledPath.current === selectedPath) {
+    if (scrolledPath.current === selectedPath || !isHighlighterReady) {
       return;
     }
 
@@ -76,7 +103,7 @@ function ChangedFilesDiffs() {
 
     scrolledPath.current = selectedPath;
     anchor.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, [fileDiffs, selectedPath]);
+  }, [isHighlighterReady, selectedPath]);
 
   const toggleCollapsed = useCallback((path: string) => {
     setCollapsedPaths((paths) =>
@@ -131,6 +158,7 @@ function ChangedFilesDiffs() {
         <FileDiffCard
           fileDiff={fileDiff}
           isCollapsed={collapsedPaths.has(fileDiff.name)}
+          isHighlighterReady={isHighlighterReady}
           key={fileDiff.name}
           onToggle={toggleCollapsed}
         />
