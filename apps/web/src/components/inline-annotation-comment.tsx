@@ -18,7 +18,7 @@ function InlineAnnotationComment({
   return (
     <div
       className={cn(
-        "bg-secondary text-secondary-foreground my-1 scroll-mt-14",
+        "bg-secondary text-secondary-foreground my-1 scroll-mt-0",
         className
       )}
       id={annotationInlineAnchorId(annotationId)}

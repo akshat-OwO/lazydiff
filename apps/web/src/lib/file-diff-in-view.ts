@@ -1,12 +1,9 @@
-/**
- * Sticky navbar + file headers use Tailwind `*-14` (3.5rem). The scrollspy
- * activation line sits just under that chrome.
- */
-export const FILE_DIFF_STICKY_OFFSET_REM = 3.5;
-
 export interface FileDiffSectionOffset {
   readonly path: string;
-  /** `getBoundingClientRect().top` for the file section. */
+  /**
+   * Section top relative to the scrollport top
+   * (`elementTop - scrollportTop`).
+   */
   readonly top: number;
 }
 
@@ -14,8 +11,8 @@ export interface FileDiffSectionOffset {
  * Choose the file that should appear selected while the reader scrolls.
  *
  * The active file is the last section whose top has crossed the activation
- * line. At the bottom of the page, the last section wins even if its top never
- * reaches that line.
+ * line (typically the top of the scrollport). At the bottom of the scrollport,
+ * the last section wins even if its top never reaches that line.
  */
 export function findInViewFilePath(
   sections: readonly FileDiffSectionOffset[],

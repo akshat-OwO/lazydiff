@@ -6,7 +6,7 @@ import { findInViewFilePath } from "../../src/lib/file-diff-in-view.ts";
 test("findInViewFilePath returns null when there are no sections", () => {
   strictEqual(
     findInViewFilePath([], {
-      activationOffset: 56,
+      activationOffset: 0,
       isScrolledToBottom: false,
     }),
     null
@@ -21,7 +21,7 @@ test("findInViewFilePath keeps the first file before any section crosses", () =>
         { path: "b.ts", top: 400 },
       ],
       {
-        activationOffset: 56,
+        activationOffset: 0,
         isScrolledToBottom: false,
       }
     ),
@@ -34,11 +34,11 @@ test("findInViewFilePath selects the last section at or above the activation lin
     findInViewFilePath(
       [
         { path: "a.ts", top: -200 },
-        { path: "b.ts", top: 40 },
+        { path: "b.ts", top: 0 },
         { path: "c.ts", top: 300 },
       ],
       {
-        activationOffset: 56,
+        activationOffset: 0,
         isScrolledToBottom: false,
       }
     ),
@@ -54,7 +54,7 @@ test("findInViewFilePath prefers the last file when scrolled to the bottom", () 
         { path: "b.ts", top: 200 },
       ],
       {
-        activationOffset: 56,
+        activationOffset: 0,
         isScrolledToBottom: true,
       }
     ),
