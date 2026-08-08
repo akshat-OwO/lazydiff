@@ -1,9 +1,16 @@
 import { useAtom, useAtomValue } from "@effect/atom-react";
 import { parsePatchFiles } from "@pierre/diffs";
 import type { FileDiffMetadata } from "@pierre/diffs";
-import { useLocation } from "@tanstack/react-router";
+import { useLocation, useNavigate } from "@tanstack/react-router";
 import { FileDiffIcon, FileWarningIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import { FileDiffCard } from "@/components/file-diff-card";
 import { Button } from "@/components/ui/button";
@@ -21,7 +28,12 @@ import {
   annotationInlineAnchorId,
   fileDiffAnchorId,
   fromLocationHash,
+  toLocationHash,
 } from "@/lib/file-diff-anchor";
+import {
+  FILE_DIFF_STICKY_OFFSET_REM,
+  findInViewFilePath,
+} from "@/lib/file-diff-in-view";
 import { unquoteGitPath } from "@/lib/git-path";
 import { preloadFileDiffHighlighter } from "@/lib/preload-file-diff-highlighter";
 import { gitDiffAtom } from "@/lib/rpc";
@@ -47,6 +59,7 @@ type HighlighterPreloadState =
 function ChangedFilesDiffs() {
   const gitDiff = useAtomValue(gitDiffAtom);
   const [annotationFocus, setAnnotationFocus] = useAtom(annotationFocusAtom);
+  const navigate = useNavigate();
   const selectedPath = useLocation({
     select: (location) => fromLocationHash(location.hash),
   });
@@ -86,6 +99,11 @@ function ChangedFilesDiffs() {
     highlighterPreload.fileDiffs === fileDiffs &&
     highlighterPreload.attempt === preloadAttempt;
   const scrolledPath = useRef<string | null>(null);
+  const selectedPathRef = useRef(selectedPath);
+
+  useLayoutEffect(() => {
+    selectedPathRef.current = selectedPath;
+  }, [selectedPath]);
 
   useEffect(() => {
     if (fileDiffs.length === 0) {
@@ -145,6 +163,94 @@ function ChangedFilesDiffs() {
     scrolledPath.current = selectedPath;
     anchor.scrollIntoView({ behavior: "instant", block: "start" });
   }, [isHighlighterReady, selectedPath]);
+
+  // Keep the location hash (and therefore the sidebar tree selection) aligned
+  // with the file currently under the sticky header while the reader scrolls.
+  useEffect(() => {
+    if (!isHighlighterReady || fileDiffs.length === 0) {
+      return;
+    }
+
+    let frame = 0;
+
+    const syncInViewFile = () => {
+      const pendingSelection = selectedPathRef.current;
+
+      // Sidebar clicks and history navigation update the hash before the
+      // matching scroll completes. Do not overwrite that target mid-flight.
+      if (
+        pendingSelection !== null &&
+        scrolledPath.current !== pendingSelection
+      ) {
+        return;
+      }
+
+      const rootFontSizeMatch = /^(?<size>[\d.]+)px$/u.exec(
+        getComputedStyle(document.documentElement).fontSize
+      );
+      const rootFontSize = Number(rootFontSizeMatch?.groups?.size ?? 16);
+      const activationOffset = FILE_DIFF_STICKY_OFFSET_REM * rootFontSize;
+      const sections = fileDiffs.flatMap((fileDiff) => {
+        const element = document.querySelector(
+          `#${CSS.escape(fileDiffAnchorId(fileDiff.name))}`
+        );
+
+        if (!(element instanceof HTMLElement)) {
+          return [];
+        }
+
+        return [
+          {
+            path: fileDiff.name,
+            top: element.getBoundingClientRect().top,
+          },
+        ];
+      });
+      const isScrolledToBottom =
+        window.scrollY + window.innerHeight >=
+        document.documentElement.scrollHeight - 1;
+      const inViewPath = findInViewFilePath(sections, {
+        activationOffset,
+        isScrolledToBottom,
+      });
+
+      if (inViewPath === null || inViewPath === selectedPathRef.current) {
+        return;
+      }
+
+      // Mark the path as already in view so the hash scroll effect is a no-op.
+      scrolledPath.current = inViewPath;
+      selectedPathRef.current = inViewPath;
+      void navigate({
+        hash: toLocationHash(inViewPath),
+        hashScrollIntoView: false,
+        replace: true,
+        resetScroll: false,
+        to: "/",
+      });
+    };
+
+    const onScroll = () => {
+      if (frame !== 0) {
+        return;
+      }
+
+      frame = window.requestAnimationFrame(() => {
+        frame = 0;
+        syncInViewFile();
+      });
+    };
+
+    window.addEventListener("scroll", onScroll, { passive: true });
+
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+
+      if (frame !== 0) {
+        window.cancelAnimationFrame(frame);
+      }
+    };
+  }, [fileDiffs, isHighlighterReady, navigate]);
 
   useEffect(() => {
     if (annotationFocus === null || !isHighlighterReady) {

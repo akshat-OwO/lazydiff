@@ -52,7 +52,7 @@ function ChangedFilesTree({
   }, [entries, model, paths]);
 
   // Mirror the selected file into the tree, including selections made by the
-  // browser history or by the diff list.
+  // browser history, diff list, or scrollspy hash updates.
   useEffect(() => {
     for (const path of model.getSelectedPaths()) {
       if (path !== activePath) {
@@ -62,6 +62,7 @@ function ChangedFilesTree({
 
     if (activePath !== null) {
       model.getItem(activePath)?.select();
+      model.scrollToPath(activePath, { focus: false, offset: "nearest" });
     }
   }, [activePath, model]);
 
