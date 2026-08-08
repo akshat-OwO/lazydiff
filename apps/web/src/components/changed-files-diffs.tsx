@@ -25,6 +25,7 @@ import {
   toLocationHash,
 } from "@/lib/file-diff-anchor";
 import { findInViewFilePath } from "@/lib/file-diff-in-view";
+import type { FileDiffSectionContentOffset } from "@/lib/file-diff-in-view";
 import { unquoteGitPath } from "@/lib/git-path";
 import { preloadFileDiffHighlighter } from "@/lib/preload-file-diff-highlighter";
 import { gitDiffAtom } from "@/lib/rpc";
@@ -33,6 +34,37 @@ const withoutPath = (paths: ReadonlySet<string>, path: string) => {
   const next = new Set(paths);
   next.delete(path);
   return next;
+};
+
+const measureSectionContentTops = (
+  scrollport: HTMLElement,
+  fileDiffs: readonly FileDiffMetadata[]
+): readonly FileDiffSectionContentOffset[] => {
+  const scrollportTop = scrollport.getBoundingClientRect().top;
+  const { scrollTop } = scrollport;
+  const elementsById = new Map<string, HTMLElement>();
+
+  for (const child of scrollport.children) {
+    if (child instanceof HTMLElement && child.id.length > 0) {
+      elementsById.set(child.id, child);
+    }
+  }
+
+  return fileDiffs.flatMap((fileDiff) => {
+    const element = elementsById.get(fileDiffAnchorId(fileDiff.name));
+
+    if (element === undefined) {
+      return [];
+    }
+
+    return [
+      {
+        contentTop:
+          element.getBoundingClientRect().top - scrollportTop + scrollTop,
+        path: fileDiff.name,
+      },
+    ];
+  });
 };
 
 type HighlighterPreloadState =
@@ -93,6 +125,11 @@ function ChangedFilesDiffs() {
   const scrollFrame = useRef(0);
   // Ignore scrollspy while hash-driven scrollIntoView is relocating the pane.
   const ignoreScrollSpy = useRef(false);
+  const scrollportRef = useRef<HTMLDivElement | null>(null);
+  // Content tops are measured only when layout changes, not on every frame.
+  const sectionContentTops = useRef<
+    readonly FileDiffSectionContentOffset[] | null
+  >(null);
 
   useEffect(() => {
     if (fileDiffs.length === 0) {
@@ -179,6 +216,34 @@ function ChangedFilesDiffs() {
     };
   }, [annotationFocus, isHighlighterReady, setAnnotationFocus]);
 
+  useEffect(() => {
+    sectionContentTops.current = null;
+  }, [collapsedPaths, fileDiffs, isHighlighterReady]);
+
+  useEffect(() => {
+    const scrollport = scrollportRef.current;
+
+    if (scrollport === null || !isHighlighterReady || fileDiffs.length === 0) {
+      return;
+    }
+
+    const resizeObserver = new ResizeObserver(() => {
+      sectionContentTops.current = null;
+    });
+
+    resizeObserver.observe(scrollport);
+
+    for (const child of scrollport.children) {
+      if (child instanceof HTMLElement) {
+        resizeObserver.observe(child);
+      }
+    }
+
+    return () => {
+      resizeObserver.disconnect();
+    };
+  }, [collapsedPaths, fileDiffs, isHighlighterReady]);
+
   const onDiffsScroll = useCallback<UIEventHandler<HTMLDivElement>>(
     (event) => {
       const scrollport = event.currentTarget;
@@ -198,29 +263,22 @@ function ChangedFilesDiffs() {
           return;
         }
 
-        const scrollportTop = scrollport.getBoundingClientRect().top;
-        const sections = fileDiffs.flatMap((fileDiff) => {
-          const element = document.querySelector(
-            `#${CSS.escape(fileDiffAnchorId(fileDiff.name))}`
-          );
+        const sections =
+          sectionContentTops.current ??
+          measureSectionContentTops(scrollport, fileDiffs);
+        sectionContentTops.current = sections;
 
-          if (!(element instanceof HTMLElement)) {
-            return [];
-          }
+        if (sections.length === 0) {
+          return;
+        }
 
-          return [
-            {
-              path: fileDiff.name,
-              top: element.getBoundingClientRect().top - scrollportTop,
-            },
-          ];
-        });
         const isScrolledToBottom =
           scrollport.scrollTop + scrollport.clientHeight >=
           scrollport.scrollHeight - 1;
         const inViewPath = findInViewFilePath(sections, {
           activationOffset: 0,
           isScrolledToBottom,
+          scrollTop: scrollport.scrollTop,
         });
 
         if (inViewPath === null || inViewPath === scrolledPath.current) {
@@ -332,6 +390,7 @@ function ChangedFilesDiffs() {
       className="absolute inset-0 overflow-y-auto"
       data-slot="file-diffs-scrollport"
       onScroll={onDiffsScroll}
+      ref={scrollportRef}
     >
       {fileDiffs.map((fileDiff) => (
         <FileDiffCard

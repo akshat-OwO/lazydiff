@@ -1,24 +1,28 @@
-export interface FileDiffSectionOffset {
+export interface FileDiffSectionContentOffset {
   readonly path: string;
   /**
-   * Section top relative to the scrollport top
-   * (`elementTop - scrollportTop`).
+   * Section top within the scrollport's scrollable content
+   * (`elementTop - scrollportTop + scrollTop`).
    */
-  readonly top: number;
+  readonly contentTop: number;
 }
 
 /**
  * Choose the file that should appear selected while the reader scrolls.
  *
- * The active file is the last section whose top has crossed the activation
- * line (typically the top of the scrollport). At the bottom of the scrollport,
- * the last section wins even if its top never reaches that line.
+ * The active file is the last section whose content top has crossed the
+ * activation line (`scrollTop + activationOffset`). At the bottom of the
+ * scrollport, the last section wins even if its top never reaches that line.
+ *
+ * Callers should pass cached content tops so scroll frames stay O(log n) in
+ * section count and avoid measuring the DOM on every animation frame.
  */
 export function findInViewFilePath(
-  sections: readonly FileDiffSectionOffset[],
+  sections: readonly FileDiffSectionContentOffset[],
   options: {
     readonly activationOffset: number;
     readonly isScrolledToBottom: boolean;
+    readonly scrollTop: number;
   }
 ): string | null {
   if (sections.length === 0) {
@@ -29,16 +33,27 @@ export function findInViewFilePath(
     return sections.at(-1)?.path ?? null;
   }
 
-  let activePath = sections[0]?.path ?? null;
+  const activationLine = options.scrollTop + options.activationOffset;
+  let low = 0;
+  let high = sections.length - 1;
+  let activeIndex = 0;
 
-  for (const section of sections) {
-    if (section.top <= options.activationOffset) {
-      activePath = section.path;
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+    const section = sections[mid];
+
+    if (section === undefined) {
+      break;
+    }
+
+    if (section.contentTop <= activationLine) {
+      activeIndex = mid;
+      low = mid + 1;
       continue;
     }
 
-    break;
+    high = mid - 1;
   }
 
-  return activePath;
+  return sections[activeIndex]?.path ?? null;
 }
