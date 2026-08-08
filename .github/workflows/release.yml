@@ -1,0 +1,135 @@
+name: Release lazydiff
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  id-token: write
+  pull-requests: write
+
+concurrency:
+  group: release-lazydiff
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Version or release lazydiff
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Nub and Node.js
+        uses: nubjs/setup-nub@v0
+        with:
+          node-version: "24"
+          nub-version: "0.6.0"
+          package-manager-cache: false
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: nub install --frozen-lockfile
+
+      - name: Create or update release pull request
+        id: changesets
+        uses: changesets/action@v1
+        with:
+          commit: "chore: release"
+          title: "chore: release"
+          version: nub run version
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check release state
+        if: steps.changesets.outputs.hasChangesets == 'false'
+        id: release
+        shell: bash
+        run: |
+          version="$(jq --raw-output .version packages/cli/package.json)"
+          tag="v${version}"
+
+          if git rev-parse --verify --quiet "refs/tags/${tag}"; then
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if ! nub view lazydiff version >/dev/null 2>&1; then
+            echo "lazydiff must be published once locally before staged publishing can be used." >&2
+            exit 1
+          fi
+
+          if nub view "lazydiff@${version}" version >/dev/null 2>&1; then
+            echo "stage=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "stage=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "release=true" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Validate release
+        if: steps.release.outputs.release == 'true'
+        run: |
+          nub run check
+          nub run check-types
+          nub run test
+          nub run build
+
+      - name: Stage package on npm
+        if: steps.release.outputs.stage == 'true'
+        working-directory: packages/cli
+        run: nub exec npm stage publish
+
+      - name: Prepare release notes
+        if: steps.release.outputs.release == 'true'
+        shell: bash
+        run: |
+          version="${{ steps.release.outputs.version }}"
+          changelog="packages/cli/CHANGELOG.md"
+          release_notes_body="packages/cli/dist/release-notes-body.md"
+          release_notes="packages/cli/dist/release-notes.md"
+
+          awk -v version="$version" '
+            $0 == "## " version {
+              found = 1
+              next
+            }
+            found && /^## / {
+              exit
+            }
+            found {
+              print
+            }
+            END {
+              if (!found) {
+                exit 1
+              }
+            }
+          ' "$changelog" > "$release_notes_body"
+
+          if ! grep -q '[^[:space:]]' "$release_notes_body"; then
+            echo "No changelog entry found for ${version}" >&2
+            exit 1
+          fi
+
+          {
+            printf "## What's Changed\n"
+            cat "$release_notes_body"
+          } > "$release_notes"
+
+      - name: Create tag and GitHub release
+        if: steps.release.outputs.release == 'true'
+        run: |
+          gh release create \
+            "${{ steps.release.outputs.tag }}" \
+            --notes-file packages/cli/dist/release-notes.md \
+            --target "$GITHUB_SHA" \
+            --title "lazydiff ${{ steps.release.outputs.version }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
