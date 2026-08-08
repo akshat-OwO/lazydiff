@@ -1,6 +1,6 @@
 import { LazyDiffRpcs } from "@lazydiff/protocol";
 import type { GitChangeScope } from "@lazydiff/protocol";
-import { Duration, Effect, Layer, Option, Schedule, Stream } from "effect";
+import { Duration, Effect, Layer, Result, Schedule, Stream } from "effect";
 import { Atom, AtomRpc } from "effect/unstable/reactivity";
 import {
   RpcClient,
@@ -106,13 +106,17 @@ export const gitChangeScopeAutoSelectAtom = LazyDiffRpcClient.runtime.atom(
         const result = yield* client("git.status.get", {
           data: { scope },
           type: "git.status.get",
-        }).pipe(Effect.option);
+        }).pipe(Effect.result);
 
-        if (Option.isSome(result)) {
-          hasChanges[scope] = result.value.data.entries.length > 0;
+        // A failed lookup must not be treated as empty; stop so resolution
+        // cannot fall through to a lower-priority scope.
+        if (Result.isFailure(result)) {
+          break;
         }
 
-        if (hasChanges[scope] === true) {
+        hasChanges[scope] = result.success.data.entries.length > 0;
+
+        if (hasChanges[scope]) {
           break;
         }
       }

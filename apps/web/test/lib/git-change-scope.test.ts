@@ -58,12 +58,22 @@ test("resolvePreferredGitChangeScope returns undefined when no scope has changes
   );
 });
 
-test("resolvePreferredGitChangeScope skips scopes with unknown availability", () => {
+test("resolvePreferredGitChangeScope does not fall through past unknown availability", () => {
   strictEqual(
     resolvePreferredGitChangeScope({
       committed: true,
       unstaged: false,
     }),
-    "committed"
+    undefined
+  );
+});
+
+test("resolvePreferredGitChangeScope stops when the first scope is unknown", () => {
+  strictEqual(
+    resolvePreferredGitChangeScope({
+      committed: true,
+      staged: true,
+    }),
+    undefined
   );
 });

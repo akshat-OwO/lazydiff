@@ -12,14 +12,23 @@ export const gitChangeScopePreferenceOrder = [
 
 /**
  * Returns the first scope in preference order that is known to have changes.
- * Scopes omitted from the map (or set to false) are skipped.
+ *
+ * A lower-priority scope is only selected when every preceding scope is known
+ * empty (`false`). Unknown availability (omitted) stops resolution so a failed
+ * lookup cannot fall through past a scope that may still have changes.
  */
 export function resolvePreferredGitChangeScope(
   hasChanges: Readonly<Partial<Record<GitChangeScope, boolean>>>
 ): GitChangeScope | undefined {
   for (const scope of gitChangeScopePreferenceOrder) {
-    if (hasChanges[scope] === true) {
+    const availability = hasChanges[scope];
+
+    if (availability === true) {
       return scope;
+    }
+
+    if (availability !== false) {
+      return undefined;
     }
   }
 
