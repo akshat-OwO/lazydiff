@@ -62,7 +62,6 @@ function ChangedFilesTree({
 
     if (activePath !== null) {
       model.getItem(activePath)?.select();
-      model.scrollToPath(activePath, { focus: false, offset: "nearest" });
     }
   }, [activePath, model]);
 

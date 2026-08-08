@@ -332,7 +332,11 @@ function ChangedFilesDiffs() {
   }
 
   return (
-    <div className="h-full overflow-y-auto" onScroll={onDiffsScroll}>
+    <div
+      className="absolute inset-0 overflow-y-auto"
+      data-slot="file-diffs-scrollport"
+      onScroll={onDiffsScroll}
+    >
       {fileDiffs.map((fileDiff) => (
         <FileDiffCard
           fileDiff={fileDiff}

@@ -17,7 +17,7 @@ function RootLayout() {
         <Navbar />
         <div className="flex h-[calc(100svh-3.5rem)] w-full">
           <AppSidebar />
-          <SidebarInset className="min-h-0 min-w-0 flex-1 overflow-hidden">
+          <SidebarInset className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
             <Outlet />
           </SidebarInset>
           <AnnotationsSidebar />
