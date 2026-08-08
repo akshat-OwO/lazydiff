@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -65,8 +66,10 @@ jobs:
 
           if nub view "lazydiff@${version}" version >/dev/null 2>&1; then
             echo "stage=false" >> "$GITHUB_OUTPUT"
+            echo "finalize=true" >> "$GITHUB_OUTPUT"
           else
             echo "stage=true" >> "$GITHUB_OUTPUT"
+            echo "finalize=false" >> "$GITHUB_OUTPUT"
           fi
 
           echo "release=true" >> "$GITHUB_OUTPUT"
@@ -87,7 +90,7 @@ jobs:
         run: nub exec npm stage publish
 
       - name: Prepare release notes
-        if: steps.release.outputs.release == 'true'
+        if: steps.release.outputs.finalize == 'true'
         shell: bash
         run: |
           version="${{ steps.release.outputs.version }}"
@@ -124,7 +127,7 @@ jobs:
           } > "$release_notes"
 
       - name: Create tag and GitHub release
-        if: steps.release.outputs.release == 'true'
+        if: steps.release.outputs.finalize == 'true'
         run: |
           gh release create \
             "${{ steps.release.outputs.tag }}" \

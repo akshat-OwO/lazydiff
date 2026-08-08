@@ -41,7 +41,7 @@ Every user-facing change should include a Changeset:
 nub run changeset
 ```
 
-The release workflow maintains a version pull request. After that pull request is merged, it stages the npm package for human approval and creates a matching GitHub release.
+The release workflow maintains a version pull request. After that pull request is merged, it stages the npm package for human approval. Once the staged package is approved and public, run the **Release lazydiff** workflow manually to create the matching Git tag and GitHub release.
 
 ### First npm release
 
@@ -63,7 +63,7 @@ Then configure the `lazydiff` package on npm under **Settings → Trusted Publis
 - Workflow filename: `release.yml`
 - Allowed action: `npm stage publish` only
 
-For maximum security, set publishing access to require 2FA and disallow tokens. When CI stages a later version, inspect and approve it from npm's **Staged Packages** page.
+For maximum security, set publishing access to require 2FA and disallow tokens. When CI stages a later version, inspect and approve it from npm's **Staged Packages** page. After npm reports that version as public, manually run the **Release lazydiff** workflow to finalize the GitHub release.
 
 ## License
 
