@@ -7,9 +7,7 @@ import { HttpRouter, HttpStaticServer } from "effect/unstable/http";
 
 import { makeRpcRoutes } from "@/routes/rpc";
 
-const webRoot = fileURLToPath(
-  new URL("../../../../apps/web/dist/", import.meta.url)
-);
+const webRoot = fileURLToPath(new URL("web/", import.meta.url));
 
 export interface HttpServerOptions {
   readonly allowedOrigins: ReadonlySet<string>;

@@ -1,22 +1,56 @@
 {
-  "name": "@lazydiff/cli",
-  "version": "0.0.1",
+  "name": "lazydiff",
+  "version": "0.1.0",
+  "description": "Review code changes without getting lost in the diff.",
+  "keywords": [
+    "cli",
+    "diff",
+    "git",
+    "review"
+  ],
+  "homepage": "https://github.com/akshat-OwO/lazydiff#readme",
+  "bugs": {
+    "url": "https://github.com/akshat-OwO/lazydiff/issues"
+  },
+  "license": "MIT",
+  "author": "akshat",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/akshat-OwO/lazydiff.git",
+    "directory": "packages/cli"
+  },
+  "bin": {
+    "lazydiff": "dist/index.js"
+  },
+  "files": [
+    "CHANGELOG.md",
+    "dist"
+  ],
   "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
+    "build": "tsdown && nub run --cwd ../../apps/web build --outDir ../../packages/cli/dist/web --emptyOutDir",
     "check-types": "tsc --noEmit",
     "dev": "nub watch src/index.ts --no-browser",
+    "prepack": "nub run build",
     "start": "nub src/index.ts",
     "test": "nub --test test/**/*.test.ts"
   },
   "dependencies": {
-    "@effect/platform-node": "catalog:effect",
-    "@lazydiff/protocol": "workspace:*",
-    "effect": "catalog:effect",
+    "@effect/platform-node": "4.0.0-beta.102",
+    "@effect/platform-node-shared": "4.0.0-beta.102",
+    "effect": "4.0.0-beta.102",
     "open": "^11.0.0"
   },
   "devDependencies": {
-    "@nubjs/types": "catalog:types",
-    "@types/node": "catalog:types",
-    "typescript": "catalog:"
+    "@lazydiff/protocol": "workspace:*",
+    "@nubjs/types": "^0.6.0",
+    "@types/node": "^26.1.2",
+    "typescript": "^7.0.2"
+  },
+  "engines": {
+    "node": ">=24"
   }
 }
