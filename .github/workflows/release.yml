@@ -5,6 +5,11 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      version:
+        description: Published npm version to finalize
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -34,9 +39,11 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       - name: Install dependencies
+        if: github.event_name == 'push'
         run: nub install --frozen-lockfile
 
       - name: Create or update release pull request
+        if: github.event_name == 'push'
         id: changesets
         uses: changesets/action@v1
         with:
@@ -47,27 +54,89 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Check release state
-        if: steps.changesets.outputs.hasChangesets == 'false'
+        if: >-
+          github.event_name == 'workflow_dispatch' || steps.changesets.outputs.hasChangesets == 'false'
         id: release
         shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_VERSION_INPUT: ${{ inputs.version }}
         run: |
-          version="$(jq --raw-output .version packages/cli/package.json)"
-          tag="v${version}"
-
-          if git rev-parse --verify --quiet "refs/tags/${tag}"; then
-            echo "release=false" >> "$GITHUB_OUTPUT"
-            exit 0
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            version="$RELEASE_VERSION_INPUT"
+          else
+            version="$(jq --raw-output .version packages/cli/package.json)"
           fi
 
-          if ! nub view lazydiff version >/dev/null 2>&1; then
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid release version: ${version}" >&2
+            exit 1
+          fi
+
+          tag="v${version}"
+          tag_exists=false
+          if git rev-parse --verify --quiet "refs/tags/${tag}" >/dev/null; then
+            tag_exists=true
+          fi
+
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]] &&
+            ! nub view "lazydiff@${version}" version >/dev/null 2>&1; then
+            echo "lazydiff@${version} must be public on npm before it can be finalized." >&2
+            exit 1
+          fi
+
+          if [[ "$EVENT_NAME" != "workflow_dispatch" ]] &&
+            ! nub view lazydiff version >/dev/null 2>&1; then
             echo "lazydiff must be published once locally before staged publishing can be used." >&2
             exit 1
           fi
 
           if nub view "lazydiff@${version}" version >/dev/null 2>&1; then
+            release_sha="$(nub view "lazydiff@${version}" gitHead 2>/dev/null || true)"
+
+            if [[ ! "$release_sha" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "lazydiff@${version} does not identify an unambiguous publishing commit." >&2
+              exit 1
+            fi
+
+            if ! git cat-file -e "${release_sha}^{commit}" 2>/dev/null; then
+              if ! git fetch --no-tags origin "$release_sha"; then
+                echo "Publishing commit ${release_sha} could not be fetched from this repository." >&2
+                exit 1
+              fi
+            fi
+
+            if ! git cat-file -e "${release_sha}^{commit}" 2>/dev/null; then
+              echo "Publishing commit ${release_sha} is unavailable in this repository." >&2
+              exit 1
+            fi
+
+            published_version="$(git show "${release_sha}:packages/cli/package.json" | jq --raw-output .version)"
+            if [[ "$published_version" != "$version" ]]; then
+              echo "Publishing commit ${release_sha} contains lazydiff@${published_version}, not ${version}." >&2
+              exit 1
+            fi
+
+            if [[ "$tag_exists" == "true" ]]; then
+              tag_sha="$(git rev-parse "refs/tags/${tag}^{commit}")"
+              if [[ "$tag_sha" != "$release_sha" ]]; then
+                echo "${tag} points to ${tag_sha}, not publishing commit ${release_sha}." >&2
+                exit 1
+              fi
+
+              echo "release=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
             echo "stage=false" >> "$GITHUB_OUTPUT"
             echo "finalize=true" >> "$GITHUB_OUTPUT"
+            echo "sha=${release_sha}" >> "$GITHUB_OUTPUT"
           else
+            if [[ "$tag_exists" == "true" ]]; then
+              echo "${tag} exists before lazydiff@${version} is public on npm." >&2
+              exit 1
+            fi
+
             echo "stage=true" >> "$GITHUB_OUTPUT"
             echo "finalize=false" >> "$GITHUB_OUTPUT"
           fi
@@ -75,6 +144,14 @@ jobs:
           echo "release=true" >> "$GITHUB_OUTPUT"
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Check out published source
+        if: steps.release.outputs.finalize == 'true'
+        run: git checkout --detach "${{ steps.release.outputs.sha }}"
+
+      - name: Install published dependencies
+        if: steps.release.outputs.finalize == 'true'
+        run: nub install --frozen-lockfile
 
       - name: Validate release
         if: steps.release.outputs.release == 'true'
@@ -132,7 +209,7 @@ jobs:
           gh release create \
             "${{ steps.release.outputs.tag }}" \
             --notes-file packages/cli/dist/release-notes.md \
-            --target "$GITHUB_SHA" \
+            --target "${{ steps.release.outputs.sha }}" \
             --title "lazydiff ${{ steps.release.outputs.version }}"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
