@@ -268,12 +268,12 @@ function FileDiffCard({
 
   return (
     <section
-      className="scroll-mt-14 border-b"
+      className="scroll-mt-0 border-b"
       id={fileDiffAnchorId(fileDiff.name)}
     >
       <button
         aria-expanded={!isCollapsed}
-        className="bg-muted sticky top-14 z-10 flex w-full items-center gap-2 border-b px-4 py-2 text-left"
+        className="bg-muted sticky top-0 z-10 flex w-full items-center gap-2 border-b px-4 py-2 text-left"
         onClick={() => onToggle(fileDiff.name)}
         type="button"
       >

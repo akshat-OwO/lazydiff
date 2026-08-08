@@ -15,9 +15,9 @@ function RootLayout() {
     <ThemeProvider>
       <SidebarProvider className="block">
         <Navbar />
-        <div className="flex min-h-[calc(100svh-3.5rem)] w-full">
+        <div className="flex h-[calc(100svh-3.5rem)] w-full">
           <AppSidebar />
-          <SidebarInset className="min-h-[calc(100svh-3.5rem)] min-w-0 flex-1">
+          <SidebarInset className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
             <Outlet />
           </SidebarInset>
           <AnnotationsSidebar />

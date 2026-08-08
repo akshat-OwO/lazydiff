@@ -7,7 +7,7 @@ import {
 } from "@pierre/trees/react";
 import { useNavigate } from "@tanstack/react-router";
 import { SearchIcon } from "lucide-react";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 
 import { Input } from "@/components/ui/input";
 import { toLocationHash } from "@/lib/file-diff-anchor";
@@ -45,6 +45,7 @@ function ChangedFilesTree({
   const selectedPaths = useFileTreeSelection(model);
   const selectedPath =
     selectedPaths.length === 1 ? selectedPaths[0] : undefined;
+  const previousSelectedPath = useRef(selectedPath);
 
   useEffect(() => {
     model.resetPaths(paths);
@@ -52,9 +53,19 @@ function ChangedFilesTree({
   }, [entries, model, paths]);
 
   // Mirror the selected file into the tree, including selections made by the
-  // browser history or by the diff list.
+  // browser history, diff list, or scrollspy hash updates.
   useEffect(() => {
-    for (const path of model.getSelectedPaths()) {
+    const currentlySelected = model.getSelectedPaths();
+    const alreadyMirrored =
+      activePath === null
+        ? currentlySelected.length === 0
+        : currentlySelected.length === 1 && currentlySelected[0] === activePath;
+
+    if (alreadyMirrored) {
+      return;
+    }
+
+    for (const path of currentlySelected) {
       if (path !== activePath) {
         model.getItem(path)?.deselect();
       }
@@ -66,8 +77,14 @@ function ChangedFilesTree({
   }, [activePath, model]);
 
   // Directories only expand and collapse; the hash always names a file diff.
+  // Only navigate when the tree selection itself changes — never when the hash
+  // changed first (scrollspy / history) or we overwrite the in-view file.
   useEffect(() => {
+    const selectedPathChanged = previousSelectedPath.current !== selectedPath;
+    previousSelectedPath.current = selectedPath;
+
     if (
+      !selectedPathChanged ||
       selectedPath === undefined ||
       selectedPath === activePath ||
       model.getItem(selectedPath)?.isDirectory() !== false

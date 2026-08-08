@@ -1,9 +1,17 @@
 import { useAtom, useAtomValue } from "@effect/atom-react";
 import { parsePatchFiles } from "@pierre/diffs";
 import type { FileDiffMetadata } from "@pierre/diffs";
-import { useLocation } from "@tanstack/react-router";
+import { useLocation, useNavigate } from "@tanstack/react-router";
 import { FileDiffIcon, FileWarningIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import type { UIEventHandler } from "react";
 
 import { FileDiffCard } from "@/components/file-diff-card";
 import { Button } from "@/components/ui/button";
@@ -16,12 +24,19 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
-import { annotationFocusAtom } from "@/lib/annotations";
+import {
+  annotationDraftAtom,
+  annotationFocusAtom,
+  annotationsAtom,
+} from "@/lib/annotations";
 import {
   annotationInlineAnchorId,
   fileDiffAnchorId,
   fromLocationHash,
+  toLocationHash,
 } from "@/lib/file-diff-anchor";
+import { findInViewFilePath } from "@/lib/file-diff-in-view";
+import type { FileDiffSectionContentOffset } from "@/lib/file-diff-in-view";
 import { unquoteGitPath } from "@/lib/git-path";
 import { preloadFileDiffHighlighter } from "@/lib/preload-file-diff-highlighter";
 import { gitDiffAtom } from "@/lib/rpc";
@@ -30,6 +45,37 @@ const withoutPath = (paths: ReadonlySet<string>, path: string) => {
   const next = new Set(paths);
   next.delete(path);
   return next;
+};
+
+const measureSectionContentTops = (
+  scrollport: HTMLElement,
+  fileDiffs: readonly FileDiffMetadata[]
+): readonly FileDiffSectionContentOffset[] => {
+  const scrollportTop = scrollport.getBoundingClientRect().top;
+  const { scrollTop } = scrollport;
+  const elementsById = new Map<string, HTMLElement>();
+
+  for (const child of scrollport.children) {
+    if (child instanceof HTMLElement && child.id.length > 0) {
+      elementsById.set(child.id, child);
+    }
+  }
+
+  return fileDiffs.flatMap((fileDiff) => {
+    const element = elementsById.get(fileDiffAnchorId(fileDiff.name));
+
+    if (element === undefined) {
+      return [];
+    }
+
+    return [
+      {
+        contentTop:
+          element.getBoundingClientRect().top - scrollportTop + scrollTop,
+        path: fileDiff.name,
+      },
+    ];
+  });
 };
 
 type HighlighterPreloadState =
@@ -46,7 +92,10 @@ type HighlighterPreloadState =
 
 function ChangedFilesDiffs() {
   const gitDiff = useAtomValue(gitDiffAtom);
+  const annotations = useAtomValue(annotationsAtom);
+  const annotationDraft = useAtomValue(annotationDraftAtom);
   const [annotationFocus, setAnnotationFocus] = useAtom(annotationFocusAtom);
+  const navigate = useNavigate();
   const selectedPath = useLocation({
     select: (location) => fromLocationHash(location.hash),
   });
@@ -86,6 +135,42 @@ function ChangedFilesDiffs() {
     highlighterPreload.fileDiffs === fileDiffs &&
     highlighterPreload.attempt === preloadAttempt;
   const scrolledPath = useRef<string | null>(null);
+  const scrollFrame = useRef(0);
+  // Ignore scrollspy while hash-driven scrollIntoView is relocating the pane.
+  const ignoreScrollSpy = useRef(false);
+  const scrollportRef = useRef<HTMLDivElement | null>(null);
+  // Content tops are measured only when layout changes, not on every frame.
+  const sectionContentTops = useRef<{
+    readonly key: string;
+    readonly sections: readonly FileDiffSectionContentOffset[];
+  } | null>(null);
+  const sectionLayoutKey = useMemo(() => {
+    const collapsedKey = [...collapsedPaths].toSorted().join("\n");
+    const fileKey = fileDiffs.map((fileDiff) => fileDiff.name).join("\n");
+    const focusKey =
+      annotationFocus === null
+        ? ""
+        : `${annotationFocus.filePath}\0${annotationFocus.annotationId}`;
+    const annotationsKey = annotations
+      .map(
+        (annotation) =>
+          `${annotation.id}\0${annotation.filePath}\0${annotation.comment.length}`
+      )
+      .join("\n");
+    const draftKey =
+      annotationDraft === null
+        ? ""
+        : `${annotationDraft.filePath}\0${annotationDraft.lineNumber}\0${annotationDraft.codeDiff.length}`;
+
+    return `${isHighlighterReady ? "1" : "0"}\n${fileKey}\n${collapsedKey}\n${focusKey}\n${annotationsKey}\n${draftKey}`;
+  }, [
+    annotationDraft,
+    annotationFocus,
+    annotations,
+    collapsedPaths,
+    fileDiffs,
+    isHighlighterReady,
+  ]);
 
   useEffect(() => {
     if (fileDiffs.length === 0) {
@@ -142,8 +227,12 @@ function ChangedFilesDiffs() {
       return;
     }
 
+    ignoreScrollSpy.current = true;
     scrolledPath.current = selectedPath;
     anchor.scrollIntoView({ behavior: "instant", block: "start" });
+    window.requestAnimationFrame(() => {
+      ignoreScrollSpy.current = false;
+    });
   }, [isHighlighterReady, selectedPath]);
 
   useEffect(() => {
@@ -168,6 +257,101 @@ function ChangedFilesDiffs() {
     };
   }, [annotationFocus, isHighlighterReady, setAnnotationFocus]);
 
+  // Invalidate before paint so collapse/expand scroll anchoring cannot reuse
+  // offsets from the previous layout.
+  useLayoutEffect(() => {
+    sectionContentTops.current = null;
+
+    if (scrollFrame.current !== 0) {
+      window.cancelAnimationFrame(scrollFrame.current);
+      scrollFrame.current = 0;
+    }
+  }, [sectionLayoutKey]);
+
+  useEffect(() => {
+    const scrollport = scrollportRef.current;
+
+    if (scrollport === null || !isHighlighterReady || fileDiffs.length === 0) {
+      return;
+    }
+
+    const resizeObserver = new ResizeObserver(() => {
+      sectionContentTops.current = null;
+    });
+
+    resizeObserver.observe(scrollport);
+
+    for (const child of scrollport.children) {
+      if (child instanceof HTMLElement) {
+        resizeObserver.observe(child);
+      }
+    }
+
+    return () => {
+      resizeObserver.disconnect();
+    };
+  }, [collapsedPaths, fileDiffs, isHighlighterReady]);
+
+  const onDiffsScroll = useCallback<UIEventHandler<HTMLDivElement>>(
+    (event) => {
+      const scrollport = event.currentTarget;
+
+      if (scrollFrame.current !== 0) {
+        return;
+      }
+
+      scrollFrame.current = window.requestAnimationFrame(() => {
+        scrollFrame.current = 0;
+
+        if (
+          ignoreScrollSpy.current ||
+          !isHighlighterReady ||
+          fileDiffs.length === 0
+        ) {
+          return;
+        }
+
+        const cached = sectionContentTops.current;
+        const sections =
+          cached !== null && cached.key === sectionLayoutKey
+            ? cached.sections
+            : measureSectionContentTops(scrollport, fileDiffs);
+        sectionContentTops.current = {
+          key: sectionLayoutKey,
+          sections,
+        };
+
+        if (sections.length === 0) {
+          return;
+        }
+
+        const isScrolledToBottom =
+          scrollport.scrollTop + scrollport.clientHeight >=
+          scrollport.scrollHeight - 1;
+        const inViewPath = findInViewFilePath(sections, {
+          activationOffset: 0,
+          isScrolledToBottom,
+          scrollTop: scrollport.scrollTop,
+        });
+
+        if (inViewPath === null || inViewPath === scrolledPath.current) {
+          return;
+        }
+
+        // Mark the path as already in view so the hash scroll effect is a no-op.
+        scrolledPath.current = inViewPath;
+        void navigate({
+          hash: toLocationHash(inViewPath),
+          hashScrollIntoView: false,
+          replace: true,
+          resetScroll: false,
+          to: "/",
+        });
+      });
+    },
+    [fileDiffs, isHighlighterReady, navigate, sectionLayoutKey]
+  );
+
   const toggleCollapsed = useCallback((path: string) => {
     setCollapsedPaths((paths) =>
       paths.has(path) ? withoutPath(paths, path) : new Set(paths).add(path)
@@ -191,7 +375,10 @@ function ChangedFilesDiffs() {
 
   if (gitDiff._tag === "Initial") {
     return (
-      <div aria-label="Loading diffs" className="space-y-3 p-4">
+      <div
+        aria-label="Loading diffs"
+        className="h-full space-y-3 overflow-y-auto p-4"
+      >
         <Skeleton className="h-8 w-full" />
         <Skeleton className="h-64 w-full" />
         <Skeleton className="h-8 w-full" />
@@ -201,7 +388,7 @@ function ChangedFilesDiffs() {
 
   if (gitDiff._tag === "Failure") {
     return (
-      <Empty className="min-h-[60svh]">
+      <Empty className="h-full overflow-y-auto">
         <EmptyHeader>
           <EmptyMedia variant="icon">
             <FileWarningIcon />
@@ -215,7 +402,7 @@ function ChangedFilesDiffs() {
 
   if (fileDiffs.length === 0) {
     return (
-      <Empty className="min-h-[60svh]">
+      <Empty className="h-full overflow-y-auto">
         <EmptyHeader>
           <EmptyMedia variant="icon">
             <FileDiffIcon />
@@ -232,7 +419,7 @@ function ChangedFilesDiffs() {
 
   if (isHighlighterFailed) {
     return (
-      <Empty className="min-h-[60svh]">
+      <Empty className="h-full overflow-y-auto">
         <EmptyHeader>
           <EmptyMedia variant="icon">
             <FileWarningIcon />
@@ -252,7 +439,12 @@ function ChangedFilesDiffs() {
   }
 
   return (
-    <div>
+    <div
+      className="absolute inset-0 overflow-y-auto"
+      data-slot="file-diffs-scrollport"
+      onScroll={onDiffsScroll}
+      ref={scrollportRef}
+    >
       {fileDiffs.map((fileDiff) => (
         <FileDiffCard
           fileDiff={fileDiff}
