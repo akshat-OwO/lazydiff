@@ -1,4 +1,9 @@
-import { useAtom, useAtomSet, useAtomValue } from "@effect/atom-react";
+import {
+  useAtom,
+  useAtomMount,
+  useAtomSet,
+  useAtomValue,
+} from "@effect/atom-react";
 import type { GitChangeScope } from "@lazydiff/protocol";
 import { Link } from "@tanstack/react-router";
 import { MessageSquareTextIcon } from "lucide-react";
@@ -25,6 +30,7 @@ import { formatLazydiffTitle } from "@/lib/app-title";
 import {
   gitBranchChangesAtom,
   gitChangeScopeAtom,
+  gitChangeScopeAutoSelectAtom,
   gitRepositoryAtom,
 } from "@/lib/rpc";
 
@@ -150,9 +156,15 @@ function BrandTitle() {
   );
 }
 
+function GitChangeScopeAutoSelect() {
+  useAtomMount(gitChangeScopeAutoSelectAtom);
+  return null;
+}
+
 function Navbar() {
   return (
     <header className="bg-sidebar text-sidebar-foreground border-sidebar-border sticky top-0 z-40 border-b">
+      <GitChangeScopeAutoSelect />
       <nav
         aria-label="Primary navigation"
         className="flex h-14 w-full items-center justify-between px-4 sm:px-6"

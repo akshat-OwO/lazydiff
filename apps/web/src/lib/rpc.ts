@@ -1,6 +1,6 @@
 import { LazyDiffRpcs } from "@lazydiff/protocol";
 import type { GitChangeScope } from "@lazydiff/protocol";
-import { Duration, Effect, Layer, Schedule, Stream } from "effect";
+import { Duration, Effect, Layer, Option, Schedule, Stream } from "effect";
 import { Atom, AtomRpc } from "effect/unstable/reactivity";
 import {
   RpcClient,
@@ -8,6 +8,12 @@ import {
   RpcSerialization,
 } from "effect/unstable/rpc";
 import { Socket } from "effect/unstable/socket";
+
+import { annotationDraftAtom } from "@/lib/annotations";
+import {
+  gitChangeScopePreferenceOrder,
+  resolvePreferredGitChangeScope,
+} from "@/lib/git-change-scope";
 
 const webSocketUrl = Effect.sync(() => {
   const url = new URL("/ws", globalThis.location.href);
@@ -71,6 +77,55 @@ export const gitStatusAtom = LazyDiffRpcClient.runtime.atom((get) =>
       });
     })
   ).pipe(Stream.retry(rpcRetrySchedule))
+);
+
+/**
+ * When the selected scope has no changes, switch to the first preferred scope
+ * that does (unstaged → staged → committed).
+ */
+export const gitChangeScopeAutoSelectAtom = LazyDiffRpcClient.runtime.atom(
+  (get) =>
+    Effect.gen(function* autoSelectGitChangeScope() {
+      const status = get(gitStatusAtom);
+
+      if (status._tag !== "Success" || status.value.data.entries.length > 0) {
+        return;
+      }
+
+      const client = yield* LazyDiffRpcClient;
+      const currentScope = get(gitChangeScopeAtom);
+      const hasChanges: Partial<Record<GitChangeScope, boolean>> = {
+        [currentScope]: false,
+      };
+
+      for (const scope of gitChangeScopePreferenceOrder) {
+        if (scope in hasChanges) {
+          continue;
+        }
+
+        const result = yield* client("git.status.get", {
+          data: { scope },
+          type: "git.status.get",
+        }).pipe(Effect.option);
+
+        if (Option.isSome(result)) {
+          hasChanges[scope] = result.value.data.entries.length > 0;
+        }
+
+        if (hasChanges[scope] === true) {
+          break;
+        }
+      }
+
+      const preferred = resolvePreferredGitChangeScope(hasChanges);
+
+      if (preferred === undefined || preferred === currentScope) {
+        return;
+      }
+
+      get.set(annotationDraftAtom, null);
+      get.set(gitChangeScopeAtom, preferred);
+    })
 );
 
 export const gitDiffAtom = LazyDiffRpcClient.runtime.atom((get) =>
