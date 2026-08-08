@@ -91,6 +91,8 @@ function ChangedFilesDiffs() {
     highlighterPreload.attempt === preloadAttempt;
   const scrolledPath = useRef<string | null>(null);
   const scrollFrame = useRef(0);
+  // Ignore scrollspy while hash-driven scrollIntoView is relocating the pane.
+  const ignoreScrollSpy = useRef(false);
 
   useEffect(() => {
     if (fileDiffs.length === 0) {
@@ -147,8 +149,12 @@ function ChangedFilesDiffs() {
       return;
     }
 
+    ignoreScrollSpy.current = true;
     scrolledPath.current = selectedPath;
     anchor.scrollIntoView({ behavior: "instant", block: "start" });
+    window.requestAnimationFrame(() => {
+      ignoreScrollSpy.current = false;
+    });
   }, [isHighlighterReady, selectedPath]);
 
   useEffect(() => {
@@ -184,13 +190,11 @@ function ChangedFilesDiffs() {
       scrollFrame.current = window.requestAnimationFrame(() => {
         scrollFrame.current = 0;
 
-        if (!isHighlighterReady || fileDiffs.length === 0) {
-          return;
-        }
-
-        // Sidebar clicks and history navigation update the hash before the
-        // matching scroll completes. Do not overwrite that target mid-flight.
-        if (selectedPath !== null && scrolledPath.current !== selectedPath) {
+        if (
+          ignoreScrollSpy.current ||
+          !isHighlighterReady ||
+          fileDiffs.length === 0
+        ) {
           return;
         }
 
@@ -219,15 +223,7 @@ function ChangedFilesDiffs() {
           isScrolledToBottom,
         });
 
-        if (
-          inViewPath === null ||
-          inViewPath === selectedPath ||
-          inViewPath === scrolledPath.current
-        ) {
-          if (inViewPath !== null) {
-            scrolledPath.current = inViewPath;
-          }
-
+        if (inViewPath === null || inViewPath === scrolledPath.current) {
           return;
         }
 
@@ -242,7 +238,7 @@ function ChangedFilesDiffs() {
         });
       });
     },
-    [fileDiffs, isHighlighterReady, navigate, selectedPath]
+    [fileDiffs, isHighlighterReady, navigate]
   );
 
   const toggleCollapsed = useCallback((path: string) => {
