@@ -1,6 +1,6 @@
 {
   "name": "lazydiff",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Review code changes without getting lost in the diff.",
   "keywords": [
     "cli",
