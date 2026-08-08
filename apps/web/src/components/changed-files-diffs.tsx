@@ -24,7 +24,11 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
-import { annotationFocusAtom } from "@/lib/annotations";
+import {
+  annotationDraftAtom,
+  annotationFocusAtom,
+  annotationsAtom,
+} from "@/lib/annotations";
 import {
   annotationInlineAnchorId,
   fileDiffAnchorId,
@@ -88,6 +92,8 @@ type HighlighterPreloadState =
 
 function ChangedFilesDiffs() {
   const gitDiff = useAtomValue(gitDiffAtom);
+  const annotations = useAtomValue(annotationsAtom);
+  const annotationDraft = useAtomValue(annotationDraftAtom);
   const [annotationFocus, setAnnotationFocus] = useAtom(annotationFocusAtom);
   const navigate = useNavigate();
   const selectedPath = useLocation({
@@ -141,8 +147,30 @@ function ChangedFilesDiffs() {
   const sectionLayoutKey = useMemo(() => {
     const collapsedKey = [...collapsedPaths].toSorted().join("\n");
     const fileKey = fileDiffs.map((fileDiff) => fileDiff.name).join("\n");
-    return `${isHighlighterReady ? "1" : "0"}\n${fileKey}\n${collapsedKey}`;
-  }, [collapsedPaths, fileDiffs, isHighlighterReady]);
+    const focusKey =
+      annotationFocus === null
+        ? ""
+        : `${annotationFocus.filePath}\0${annotationFocus.annotationId}`;
+    const annotationsKey = annotations
+      .map(
+        (annotation) =>
+          `${annotation.id}\0${annotation.filePath}\0${annotation.comment.length}`
+      )
+      .join("\n");
+    const draftKey =
+      annotationDraft === null
+        ? ""
+        : `${annotationDraft.filePath}\0${annotationDraft.lineNumber}\0${annotationDraft.codeDiff.length}`;
+
+    return `${isHighlighterReady ? "1" : "0"}\n${fileKey}\n${collapsedKey}\n${focusKey}\n${annotationsKey}\n${draftKey}`;
+  }, [
+    annotationDraft,
+    annotationFocus,
+    annotations,
+    collapsedPaths,
+    fileDiffs,
+    isHighlighterReady,
+  ]);
 
   useEffect(() => {
     if (fileDiffs.length === 0) {
