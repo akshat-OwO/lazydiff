@@ -3,7 +3,14 @@ import { parsePatchFiles } from "@pierre/diffs";
 import type { FileDiffMetadata } from "@pierre/diffs";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import { FileDiffIcon, FileWarningIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { UIEventHandler } from "react";
 
 import { FileDiffCard } from "@/components/file-diff-card";
@@ -127,9 +134,15 @@ function ChangedFilesDiffs() {
   const ignoreScrollSpy = useRef(false);
   const scrollportRef = useRef<HTMLDivElement | null>(null);
   // Content tops are measured only when layout changes, not on every frame.
-  const sectionContentTops = useRef<
-    readonly FileDiffSectionContentOffset[] | null
-  >(null);
+  const sectionContentTops = useRef<{
+    readonly key: string;
+    readonly sections: readonly FileDiffSectionContentOffset[];
+  } | null>(null);
+  const sectionLayoutKey = useMemo(() => {
+    const collapsedKey = [...collapsedPaths].toSorted().join("\n");
+    const fileKey = fileDiffs.map((fileDiff) => fileDiff.name).join("\n");
+    return `${isHighlighterReady ? "1" : "0"}\n${fileKey}\n${collapsedKey}`;
+  }, [collapsedPaths, fileDiffs, isHighlighterReady]);
 
   useEffect(() => {
     if (fileDiffs.length === 0) {
@@ -216,9 +229,16 @@ function ChangedFilesDiffs() {
     };
   }, [annotationFocus, isHighlighterReady, setAnnotationFocus]);
 
-  useEffect(() => {
+  // Invalidate before paint so collapse/expand scroll anchoring cannot reuse
+  // offsets from the previous layout.
+  useLayoutEffect(() => {
     sectionContentTops.current = null;
-  }, [collapsedPaths, fileDiffs, isHighlighterReady]);
+
+    if (scrollFrame.current !== 0) {
+      window.cancelAnimationFrame(scrollFrame.current);
+      scrollFrame.current = 0;
+    }
+  }, [sectionLayoutKey]);
 
   useEffect(() => {
     const scrollport = scrollportRef.current;
@@ -263,10 +283,15 @@ function ChangedFilesDiffs() {
           return;
         }
 
+        const cached = sectionContentTops.current;
         const sections =
-          sectionContentTops.current ??
-          measureSectionContentTops(scrollport, fileDiffs);
-        sectionContentTops.current = sections;
+          cached !== null && cached.key === sectionLayoutKey
+            ? cached.sections
+            : measureSectionContentTops(scrollport, fileDiffs);
+        sectionContentTops.current = {
+          key: sectionLayoutKey,
+          sections,
+        };
 
         if (sections.length === 0) {
           return;
@@ -296,7 +321,7 @@ function ChangedFilesDiffs() {
         });
       });
     },
-    [fileDiffs, isHighlighterReady, navigate]
+    [fileDiffs, isHighlighterReady, navigate, sectionLayoutKey]
   );
 
   const toggleCollapsed = useCallback((path: string) => {
