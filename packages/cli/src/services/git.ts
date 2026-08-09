@@ -388,7 +388,7 @@ const make = (workingDirectory?: string) =>
           }
         }
 
-        const localNames = new Set(localBranches.map(({ name }) => name));
+        const pairedRemoteNames = new Set<string>();
         const pairedLocalBranches: BranchWithRecency[] = localBranches.map(
           (localBranch) => {
             const remoteName = matchingRemoteName(
@@ -396,6 +396,10 @@ const make = (workingDirectory?: string) =>
               remoteBranches,
               remoteNames
             );
+
+            if (remoteName !== undefined) {
+              pairedRemoteNames.add(remoteName);
+            }
 
             return {
               branch: {
@@ -409,10 +413,9 @@ const make = (workingDirectory?: string) =>
             };
           }
         );
-        const visibleRemoteBranches = remoteBranches.filter(({ branch }) => {
-          const parsed = parseRemoteBranch(branch.name, remoteNames);
-          return parsed === undefined || !localNames.has(parsed.branch);
-        });
+        const visibleRemoteBranches = remoteBranches.filter(
+          ({ branch }) => !pairedRemoteNames.has(branch.name)
+        );
 
         return [
           ...pairedLocalBranches.toSorted(byCurrentRecencyAndName),
@@ -504,8 +507,8 @@ const make = (workingDirectory?: string) =>
                 );
               }
 
-              yield* runChecked(["branch", name]);
-              const head = yield* switchBranchUnlocked(name);
+              yield* runChecked(["switch", "-c", name]);
+              const head = yield* currentBranch();
 
               return head._tag === "Branch"
                 ? head

@@ -520,10 +520,14 @@ test("switchBranch creates a tracking branch for a remote-only ref", async () =>
     const remote = yield* fileSystem.makeTempDirectoryScoped({
       prefix: "lazydiff-git-remote-bare-",
     });
+    const upstream = yield* fileSystem.makeTempDirectoryScoped({
+      prefix: "lazydiff-git-upstream-bare-",
+    });
     const run = (args: readonly string[], cwd = repository) =>
       childProcessSpawner.string(ChildProcess.make("git", args, { cwd }));
 
     yield* run(["init", "--bare"], remote);
+    yield* run(["init", "--bare"], upstream);
     yield* run(["init", "--initial-branch", "main"]);
     yield* fileSystem.writeFileString(
       path.join(repository, "README.md"),
@@ -540,23 +544,26 @@ test("switchBranch creates a tracking branch for a remote-only ref", async () =>
       "Initial commit",
     ]);
     yield* run(["remote", "add", "origin", remote]);
+    yield* run(["remote", "add", "upstream", upstream]);
     yield* run(["push", "-u", "origin", "main"]);
     yield* run(["branch", "feature/remote-only"]);
     yield* run(["push", "origin", "feature/remote-only"]);
+    yield* run(["push", "upstream", "feature/remote-only"]);
     yield* run(["branch", "-D", "feature/remote-only"]);
 
     return yield* Effect.gen(function* () {
       const git = yield* Git;
       const before = yield* git.listBranches();
       const head = yield* git.switchBranch("origin/feature/remote-only");
-      const upstream = yield* run([
+      const after = yield* git.listBranches();
+      const trackedUpstream = yield* run([
         "rev-parse",
         "--abbrev-ref",
         "--symbolic-full-name",
         "@{upstream}",
       ]).pipe(Effect.map((output) => output.trim()));
 
-      return { before, head, upstream };
+      return { after, before, head, trackedUpstream };
     }).pipe(Effect.provide(makeGitLive({ workingDirectory: repository })));
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer), Effect.runPromise);
 
@@ -573,7 +580,16 @@ test("switchBranch creates a tracking branch for a remote-only ref", async () =>
     _tag: "Branch",
     name: "feature/remote-only",
   });
-  strictEqual(result.upstream, "origin/feature/remote-only");
+  strictEqual(result.trackedUpstream, "origin/feature/remote-only");
+  deepStrictEqual(
+    result.after.find(({ name }) => name === "upstream/feature/remote-only"),
+    {
+      current: false,
+      isRemote: true,
+      name: "upstream/feature/remote-only",
+      remoteName: "upstream/feature/remote-only",
+    }
+  );
 });
 
 test("switchBranch leaves the current branch and files unchanged on checkout conflict", async () => {
