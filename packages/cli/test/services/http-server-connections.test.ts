@@ -51,9 +51,12 @@ test("SIGINT promptly closes an active HTTP connection", async (context) => {
   const exited = once(child, "exit", {
     signal: AbortSignal.timeout(2000),
   });
+  const socketClosed = once(socket, "close", {
+    signal: AbortSignal.timeout(2000),
+  });
   strictEqual(child.kill("SIGINT"), true, stderr);
 
-  const [exitCode, signal] = await exited;
+  const [[exitCode, signal]] = await Promise.all([exited, socketClosed]);
   strictEqual(exitCode, 130, stderr);
   strictEqual(signal, null, stderr);
   strictEqual(socket.destroyed, true, stderr);
