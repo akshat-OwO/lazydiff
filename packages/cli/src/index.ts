@@ -3,17 +3,22 @@
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Effect, Layer } from "effect";
 import { Command } from "effect/unstable/cli";
+import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 
 import { commands } from "@/cmds/index";
 import { HttpServerConnectionsLive } from "@/services/http-server-connections";
+import { GithubLive } from "@/services/vcs-github";
 
 import packageJson from "../package.json" with { type: "json" };
-import { GitLive } from "./services/git.ts";
 import { UiInterfaceLive } from "./services/ui-interface.ts";
 
 const AppLive = Layer.mergeAll(
   NodeServices.layer,
-  GitLive.pipe(Layer.provide(NodeServices.layer)),
+  FetchHttpClient.layer,
+  GithubLive.pipe(
+    Layer.provide(FetchHttpClient.layer),
+    Layer.provide(NodeServices.layer)
+  ),
   HttpServerConnectionsLive,
   UiInterfaceLive
 );
