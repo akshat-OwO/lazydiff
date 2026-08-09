@@ -12,6 +12,12 @@ npx lazydiff
 
 Lazydiff starts a local server and opens the review interface in your browser. Pass `--no-browser` to print the URL without opening it automatically.
 
+Production builds hide Effect HTTP server logs by default. Run with `DEBUG=1` to show the listen and request logs while keeping the startup summary:
+
+```sh
+DEBUG=1 npx lazydiff
+```
+
 Lazydiff requires Node.js 24 or newer.
 
 ## Development

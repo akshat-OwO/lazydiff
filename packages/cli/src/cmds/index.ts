@@ -1,4 +1,4 @@
-import { Config, Console, Effect, Layer } from "effect";
+import { Clock, Config, Console, Effect, Layer } from "effect";
 import { Command, Flag } from "effect/unstable/cli";
 import { ServeError } from "effect/unstable/http/HttpServerError";
 
@@ -7,6 +7,10 @@ import {
   isUnsupportedListenAddress,
   withAvailableListenPort,
 } from "@/services/listen-port";
+import {
+  formatStartupOutput,
+  shouldShowHttpLogs,
+} from "@/services/startup-output";
 import { UiInterface } from "@/services/ui-interface";
 import {
   resolveAllowedOrigins,
@@ -14,13 +18,17 @@ import {
   resolveWebUrl,
 } from "@/services/web-url";
 
+import packageJson from "../../package.json" with { type: "json" };
+
 export const commands = Command.make(
   "lazydiff",
   {
     noBrowser: Flag.boolean("no-browser").pipe(Flag.withDefault(false)),
   },
   Effect.fnUntraced(function* ({ noBrowser }) {
+    const startedAt = yield* Clock.currentTimeMillis;
     const isProd = process.env.NODE_ENV === "production";
+    const showHttpLogs = shouldShowHttpLogs(isProd, process.env.DEBUG);
     const uiInterface = yield* UiInterface;
 
     const interfaceConfig = yield* Config.all({
@@ -61,6 +69,7 @@ export const commands = Command.make(
                     host,
                     port,
                     serveWebUi: isProd,
+                    showHttpLogs,
                   })
                 )
               ).pipe(
@@ -79,10 +88,22 @@ export const commands = Command.make(
               );
             }
 
-            if (noBrowser) {
+            if (isProd) {
+              const readyAt = yield* Clock.currentTimeMillis;
+              yield* Console.log(
+                formatStartupOutput({
+                  elapsedMs: readyAt - startedAt,
+                  url: browserUrl.href,
+                  version: packageJson.version,
+                })
+              );
+            } else if (noBrowser) {
               yield* Console.log(`Lazydiff UI available at ${browserUrl.href}`);
             } else {
               yield* Console.log(`Opening browser at ${browserUrl.href}...`);
+            }
+
+            if (!noBrowser) {
               yield* uiInterface.open(browserUrl.href);
             }
 
