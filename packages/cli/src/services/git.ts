@@ -1,4 +1,6 @@
 import type {
+  GitBranch,
+  GitBranchDeleteTarget,
   GitChangeScope,
   GitFileStatus,
   GitHead,
@@ -12,6 +14,7 @@ import {
   Layer,
   Path,
   Schedule,
+  Semaphore,
   Stream,
   SubscriptionRef,
 } from "effect";
@@ -40,6 +43,8 @@ const nullDevice = "/dev/null";
 
 /** Bounds the extra `git diff` processes spawned for untracked files. */
 const untrackedDiffConcurrency = 8;
+
+const gitCommandTimeout = Duration.seconds(30);
 
 const joinPatches = (patches: readonly string[]) =>
   patches
@@ -142,6 +147,90 @@ const headsAreEqual = (left: GitHead, right: GitHead) => {
   return false;
 };
 
+const errorMessage = (error: unknown) =>
+  error instanceof Error ? error.message : String(error);
+
+const toError = (error: unknown) => new Error(errorMessage(error));
+
+interface BranchWithRecency {
+  readonly branch: GitBranch;
+  readonly lastCommit: number;
+}
+
+interface LocalBranchWithRecency {
+  readonly current: boolean;
+  readonly lastCommit: number;
+  readonly name: string;
+  readonly upstream: string | undefined;
+}
+
+const byCurrentRecencyAndName = (
+  left: BranchWithRecency,
+  right: BranchWithRecency
+) => {
+  if (left.branch.current !== right.branch.current) {
+    return left.branch.current ? -1 : 1;
+  }
+
+  return left.lastCommit === right.lastCommit
+    ? left.branch.name.localeCompare(right.branch.name)
+    : right.lastCommit - left.lastCommit;
+};
+
+const remoteCheckoutArgs = (
+  name: string,
+  trackingBranch: string | undefined,
+  localCandidateExists: boolean
+): readonly string[] => {
+  if (trackingBranch !== undefined) {
+    return ["checkout", trackingBranch];
+  }
+
+  if (localCandidateExists) {
+    return ["checkout", name];
+  }
+
+  return ["checkout", "--track", name];
+};
+
+const parseRemoteBranch = (name: string, remoteNames: readonly string[]) => {
+  const remote = remoteNames
+    .toSorted((left, right) => right.length - left.length)
+    .find((candidate) => name.startsWith(`${candidate}/`));
+
+  return remote === undefined
+    ? undefined
+    : { branch: name.slice(remote.length + 1), remote };
+};
+
+const matchingRemoteName = (
+  localBranch: LocalBranchWithRecency,
+  remoteBranches: readonly BranchWithRecency[],
+  remoteNames: readonly string[]
+) => {
+  const availableRemoteNames = new Set(
+    remoteBranches.map(({ branch }) => branch.name)
+  );
+
+  if (
+    localBranch.upstream !== undefined &&
+    availableRemoteNames.has(localBranch.upstream)
+  ) {
+    return localBranch.upstream;
+  }
+
+  const originName = `origin/${localBranch.name}`;
+
+  if (availableRemoteNames.has(originName)) {
+    return originName;
+  }
+
+  return remoteBranches.find(({ branch }) => {
+    const parsed = parseRemoteBranch(branch.name, remoteNames);
+    return parsed?.branch === localBranch.name;
+  })?.branch.name;
+};
+
 const make = (workingDirectory?: string) =>
   Effect.gen(function* () {
     const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -167,6 +256,50 @@ const make = (workingDirectory?: string) =>
     const run = Effect.fn("lazydiff/services/git/run")(
       (args: readonly string[]) => runFrom(args, repositoryRoot)
     );
+    const runResult = Effect.fn("lazydiff/services/git/runResult")(
+      (args: readonly string[]) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const handle = yield* childProcessSpawner.spawn(
+              ChildProcess.make("git", [...machineReadableConfig, ...args], {
+                cwd: repositoryRoot,
+              })
+            );
+            const result = yield* Effect.all(
+              {
+                exitCode: handle.exitCode,
+                stderr: Stream.mkString(Stream.decodeText(handle.stderr)),
+                stdout: Stream.mkString(Stream.decodeText(handle.stdout)),
+              },
+              { concurrency: "unbounded" }
+            );
+
+            return result;
+          })
+        ).pipe(Effect.timeout(gitCommandTimeout), Effect.mapError(toError))
+    );
+    const runChecked = Effect.fn("lazydiff/services/git/runChecked")(
+      (args: readonly string[]) =>
+        runResult(args).pipe(
+          Effect.flatMap(({ exitCode, stderr, stdout }) =>
+            exitCode === 0
+              ? Effect.succeed(stdout)
+              : Effect.fail(
+                  new Error(
+                    stderr.trim() ||
+                      `Git command failed with exit code ${exitCode}`
+                  )
+                )
+          )
+        )
+    );
+    const refExists = Effect.fn("lazydiff/services/git/refExists")(
+      (ref: string) =>
+        runResult(["show-ref", "--verify", "--quiet", ref]).pipe(
+          Effect.map(({ exitCode }) => exitCode === 0)
+        )
+    );
+    const branchMutationSemaphore = yield* Semaphore.make(1);
 
     const currentBranch = Effect.fn("lazydiff/services/git/currentBranch")(() =>
       run(["branch", "--show-current"]).pipe(
@@ -179,6 +312,307 @@ const make = (workingDirectory?: string) =>
               )
         )
       )
+    );
+    const initialBranch = yield* currentBranch();
+    const branchState = yield* SubscriptionRef.make(initialBranch);
+    const publishBranchChange = (head: GitHead) =>
+      SubscriptionRef.get(branchState).pipe(
+        Effect.flatMap((current) =>
+          headsAreEqual(current, head)
+            ? Effect.void
+            : SubscriptionRef.set(branchState, head)
+        )
+      );
+
+    const listBranches = Effect.fn("lazydiff/services/git/listBranches")(() =>
+      Effect.gen(function* () {
+        const [currentHead, refsOutput, remotesOutput] = yield* Effect.all(
+          [
+            currentBranch(),
+            runChecked([
+              "for-each-ref",
+              "--format=%(refname)%09%(committerdate:unix)%09%(symref)%09%(upstream:short)",
+              "refs/heads",
+              "refs/remotes",
+            ]),
+            runChecked(["remote"]),
+          ],
+          { concurrency: "unbounded" }
+        );
+        const remoteNames = remotesOutput
+          .split("\n")
+          .map((name) => name.trim())
+          .filter((name) => name.length > 0);
+        const localBranches: LocalBranchWithRecency[] = [];
+        const remoteBranches: BranchWithRecency[] = [];
+
+        for (const line of refsOutput.split("\n")) {
+          if (line.length === 0) {
+            continue;
+          }
+
+          const [fullName, lastCommitText, symbolicTarget, upstream] =
+            line.split("\t");
+
+          if (fullName === undefined || (symbolicTarget?.length ?? 0) > 0) {
+            continue;
+          }
+
+          const parsedLastCommit = Math.trunc(Number(lastCommitText ?? "0"));
+          const lastCommit = Number.isFinite(parsedLastCommit)
+            ? parsedLastCommit
+            : 0;
+
+          if (fullName.startsWith("refs/heads/")) {
+            const name = fullName.slice("refs/heads/".length);
+            localBranches.push({
+              current:
+                currentHead._tag === "Branch" && currentHead.name === name,
+              lastCommit,
+              name,
+              upstream: upstream?.length === 0 ? undefined : upstream,
+            });
+            continue;
+          }
+
+          if (fullName.startsWith("refs/remotes/")) {
+            remoteBranches.push({
+              branch: {
+                current: false,
+                isRemote: true,
+                name: fullName.slice("refs/remotes/".length),
+                remoteName: fullName.slice("refs/remotes/".length),
+              },
+              lastCommit,
+            });
+          }
+        }
+
+        const pairedRemoteNames = new Set<string>();
+        const pairedLocalBranches: BranchWithRecency[] = localBranches.map(
+          (localBranch) => {
+            const remoteName = matchingRemoteName(
+              localBranch,
+              remoteBranches,
+              remoteNames
+            );
+
+            if (remoteName !== undefined) {
+              pairedRemoteNames.add(remoteName);
+            }
+
+            return {
+              branch: {
+                current: localBranch.current,
+                isRemote: false,
+                localName: localBranch.name,
+                name: localBranch.name,
+                ...(remoteName === undefined ? {} : { remoteName }),
+              },
+              lastCommit: localBranch.lastCommit,
+            };
+          }
+        );
+        const visibleRemoteBranches = remoteBranches.filter(
+          ({ branch }) => !pairedRemoteNames.has(branch.name)
+        );
+
+        return [
+          ...pairedLocalBranches.toSorted(byCurrentRecencyAndName),
+          ...visibleRemoteBranches.toSorted(byCurrentRecencyAndName),
+        ].map(({ branch }) => branch);
+      })
+    );
+
+    const switchBranchUnlocked = Effect.fn(
+      "lazydiff/services/git/switchBranchUnlocked"
+    )((name: string) =>
+      Effect.gen(function* () {
+        if (name.trim().length === 0 || name !== name.trim()) {
+          return yield* Effect.fail(new Error("Invalid Git branch name"));
+        }
+
+        const [localExists, remoteExists] = yield* Effect.all(
+          [refExists(`refs/heads/${name}`), refExists(`refs/remotes/${name}`)],
+          { concurrency: "unbounded" }
+        );
+        let checkoutArgs: readonly string[] = ["checkout", name];
+
+        if (!localExists && remoteExists) {
+          const [remotesOutput, trackingOutput] = yield* Effect.all(
+            [
+              runChecked(["remote"]),
+              runChecked([
+                "for-each-ref",
+                "--format=%(refname:short)%09%(upstream:short)",
+                "refs/heads",
+              ]),
+            ],
+            { concurrency: "unbounded" }
+          );
+          const remoteNames = remotesOutput
+            .split("\n")
+            .map((remote) => remote.trim())
+            .filter((remote) => remote.length > 0);
+          const trackingBranch = trackingOutput
+            .split("\n")
+            .map((line) => line.split("\t"))
+            .find(([, upstream]) => upstream === name)?.[0];
+          const localCandidate = parseRemoteBranch(name, remoteNames)?.branch;
+          const localCandidateExists =
+            localCandidate === undefined
+              ? false
+              : yield* refExists(`refs/heads/${localCandidate}`);
+
+          checkoutArgs = remoteCheckoutArgs(
+            name,
+            trackingBranch,
+            localCandidateExists
+          );
+        }
+
+        yield* runChecked(checkoutArgs);
+        return yield* currentBranch();
+      })
+    );
+
+    const switchBranch = Effect.fn("lazydiff/services/git/switchBranch")(
+      (name: string) =>
+        branchMutationSemaphore
+          .withPermit(switchBranchUnlocked(name))
+          .pipe(Effect.tap(publishBranchChange))
+    );
+
+    const createBranch = Effect.fn("lazydiff/services/git/createBranch")(
+      (name: string) =>
+        branchMutationSemaphore
+          .withPermit(
+            Effect.gen(function* () {
+              if (name.trim().length === 0 || name !== name.trim()) {
+                return yield* Effect.fail(new Error("Invalid Git branch name"));
+              }
+
+              yield* runChecked(["check-ref-format", "--branch", name]);
+              const [localExists, remoteExists] = yield* Effect.all(
+                [
+                  refExists(`refs/heads/${name}`),
+                  refExists(`refs/remotes/${name}`),
+                ],
+                { concurrency: "unbounded" }
+              );
+
+              if (localExists || remoteExists) {
+                return yield* Effect.fail(
+                  new Error(`Git branch already exists: ${name}`)
+                );
+              }
+
+              yield* runChecked(["switch", "-c", name]);
+              const head = yield* currentBranch();
+
+              return head._tag === "Branch"
+                ? head
+                : yield* Effect.fail(
+                    new Error(`Created branch was not checked out: ${name}`)
+                  );
+            })
+          )
+          .pipe(Effect.tap(publishBranchChange))
+    );
+
+    const deleteLocalBranch = Effect.fn(
+      "lazydiff/services/git/deleteLocalBranch"
+    )((name: string) =>
+      Effect.gen(function* () {
+        const head = yield* currentBranch();
+
+        if (head._tag === "Branch" && head.name === name) {
+          return yield* Effect.fail(
+            new Error(`Cannot delete the currently checked out branch: ${name}`)
+          );
+        }
+
+        if (!(yield* refExists(`refs/heads/${name}`))) {
+          return yield* Effect.fail(
+            new Error(`Local Git branch not found: ${name}`)
+          );
+        }
+
+        yield* runChecked(["branch", "-d", "--", name]);
+      })
+    );
+
+    const deleteRemoteBranch = Effect.fn(
+      "lazydiff/services/git/deleteRemoteBranch"
+    )((name: string) =>
+      Effect.gen(function* () {
+        if (!(yield* refExists(`refs/remotes/${name}`))) {
+          return yield* Effect.fail(
+            new Error(`Remote Git branch not found: ${name}`)
+          );
+        }
+
+        const remoteNames = (yield* runChecked(["remote"]))
+          .split("\n")
+          .map((remote) => remote.trim())
+          .filter((remote) => remote.length > 0);
+        const parsed = parseRemoteBranch(name, remoteNames);
+
+        if (parsed === undefined) {
+          return yield* Effect.fail(
+            new Error(`Unable to resolve the remote for Git branch: ${name}`)
+          );
+        }
+
+        yield* runChecked(["push", parsed.remote, "--delete", parsed.branch]);
+      })
+    );
+
+    const deleteBranch = Effect.fn("lazydiff/services/git/deleteBranch")(
+      (options: {
+        readonly localName?: string | undefined;
+        readonly remoteName?: string | undefined;
+        readonly target: GitBranchDeleteTarget;
+      }) =>
+        branchMutationSemaphore.withPermit(
+          Effect.gen(function* () {
+            if (options.target === "local") {
+              return options.localName === undefined
+                ? yield* Effect.fail(new Error("No local Git branch to delete"))
+                : yield* deleteLocalBranch(options.localName);
+            }
+
+            if (options.target === "remote") {
+              return options.remoteName === undefined
+                ? yield* Effect.fail(
+                    new Error("No remote Git branch to delete")
+                  )
+                : yield* deleteRemoteBranch(options.remoteName);
+            }
+
+            if (options.localName === undefined) {
+              return yield* Effect.fail(
+                new Error("No local Git branch to delete")
+              );
+            }
+
+            if (options.remoteName === undefined) {
+              return yield* Effect.fail(
+                new Error("No remote Git branch to delete")
+              );
+            }
+
+            yield* deleteLocalBranch(options.localName);
+            yield* deleteRemoteBranch(options.remoteName).pipe(
+              Effect.mapError(
+                (error) =>
+                  new Error(
+                    `Local branch ${options.localName} was deleted, but remote deletion failed: ${error.message}`
+                  )
+              )
+            );
+          })
+        )
     );
 
     const resolveCommit = Effect.fn("lazydiff/services/git/resolveCommit")(
@@ -367,18 +801,6 @@ const make = (workingDirectory?: string) =>
         Stream.debounce(Duration.millis(50)),
         Stream.retry(watcherRetrySchedule)
       );
-    const initialBranch = yield* currentBranch();
-    const branchState = yield* SubscriptionRef.make(initialBranch);
-
-    const publishBranchChange = (head: GitHead) =>
-      SubscriptionRef.get(branchState).pipe(
-        Effect.flatMap((current) =>
-          headsAreEqual(current, head)
-            ? Effect.void
-            : SubscriptionRef.set(branchState, head)
-        )
-      );
-
     const watchBranchChanges = Effect.gen(function* () {
       yield* currentBranch().pipe(Effect.flatMap(publishBranchChange));
 
@@ -401,11 +823,15 @@ const make = (workingDirectory?: string) =>
     return {
       branchChanges: SubscriptionRef.changes(branchState),
       changedFiles,
+      createBranch,
       currentBranch,
+      deleteBranch,
       fileStatuses,
+      listBranches,
       repositoryChanges,
       repositoryName,
       scopeDiff,
+      switchBranch,
     };
   });
 

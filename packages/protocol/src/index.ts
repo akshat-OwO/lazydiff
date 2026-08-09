@@ -1,17 +1,27 @@
 import { Schema } from "effect";
 import { Rpc, RpcGroup } from "effect/unstable/rpc";
 
+import { GitBranchError } from "./git-branch-error.ts";
 import { GitDiffError } from "./git-diff-error.ts";
 import { GitChangedFilesError } from "./git-errors.ts";
 import { GitStatusError } from "./git-status-error.ts";
 
+export { GitBranchError } from "./git-branch-error.ts";
 export { GitDiffError } from "./git-diff-error.ts";
 export { GitChangedFilesError } from "./git-errors.ts";
 export { GitStatusError } from "./git-status-error.ts";
 
 export const BrandId = Schema.Literals([
+  "git.branch.create",
+  "git.branch.created",
+  "git.branch.delete",
+  "git.branch.deleted",
+  "git.branch.switch",
+  "git.branch.switched",
   "git.branch.subscribe",
   "git.branch.changed",
+  "git.branches.get",
+  "git.branches.result",
   "git.changed-files.get",
   "git.changed-files.result",
   "git.diff.subscribe",
@@ -34,6 +44,88 @@ export type GitBranchSubscribe = typeof GitBranchSubscribe.Type;
 
 const NonEmptyString = Schema.String.check(Schema.isNonEmpty());
 
+export const GitBranch = Schema.Struct({
+  current: Schema.Boolean,
+  isRemote: Schema.Boolean,
+  localName: Schema.optional(NonEmptyString),
+  name: NonEmptyString,
+  remoteName: Schema.optional(NonEmptyString),
+});
+
+export type GitBranch = typeof GitBranch.Type;
+
+export const GitBranchesGet = Schema.Struct({
+  data: Schema.Struct({}),
+  type: Schema.Literal("git.branches.get"),
+});
+
+export type GitBranchesGet = typeof GitBranchesGet.Type;
+
+export const GitBranchesResult = Schema.Struct({
+  data: Schema.Struct({
+    branches: Schema.Array(GitBranch),
+  }),
+  type: Schema.Literal("git.branches.result"),
+});
+
+export type GitBranchesResult = typeof GitBranchesResult.Type;
+
+export const GitBranchCreate = Schema.Struct({
+  data: Schema.Struct({
+    name: NonEmptyString,
+  }),
+  type: Schema.Literal("git.branch.create"),
+});
+
+export type GitBranchCreate = typeof GitBranchCreate.Type;
+
+export const GitBranchCreated = Schema.Struct({
+  data: Schema.Struct({
+    head: Schema.Struct({
+      _tag: Schema.Literal("Branch"),
+      name: NonEmptyString,
+    }),
+  }),
+  type: Schema.Literal("git.branch.created"),
+});
+
+export type GitBranchCreated = typeof GitBranchCreated.Type;
+
+export const GitBranchDeleteTarget = Schema.Literals([
+  "local",
+  "remote",
+  "both",
+]);
+
+export type GitBranchDeleteTarget = typeof GitBranchDeleteTarget.Type;
+
+export const GitBranchDelete = Schema.Struct({
+  data: Schema.Struct({
+    localName: Schema.optional(NonEmptyString),
+    remoteName: Schema.optional(NonEmptyString),
+    target: GitBranchDeleteTarget,
+  }),
+  type: Schema.Literal("git.branch.delete"),
+});
+
+export type GitBranchDelete = typeof GitBranchDelete.Type;
+
+export const GitBranchDeleted = Schema.Struct({
+  data: Schema.Struct({}),
+  type: Schema.Literal("git.branch.deleted"),
+});
+
+export type GitBranchDeleted = typeof GitBranchDeleted.Type;
+
+export const GitBranchSwitch = Schema.Struct({
+  data: Schema.Struct({
+    name: NonEmptyString,
+  }),
+  type: Schema.Literal("git.branch.switch"),
+});
+
+export type GitBranchSwitch = typeof GitBranchSwitch.Type;
+
 export const GitHead = Schema.Union([
   Schema.TaggedStruct("Branch", {
     name: NonEmptyString,
@@ -53,6 +145,15 @@ export const GitBranchChanged = Schema.Struct({
 });
 
 export type GitBranchChanged = typeof GitBranchChanged.Type;
+
+export const GitBranchSwitched = Schema.Struct({
+  data: Schema.Struct({
+    head: GitHead,
+  }),
+  type: Schema.Literal("git.branch.switched"),
+});
+
+export type GitBranchSwitched = typeof GitBranchSwitched.Type;
 
 export const GitChangeScope = Schema.Literals([
   "unstaged",
@@ -172,6 +273,30 @@ const GitBranchSubscribeRpc = Rpc.make("git.branch.subscribe", {
   success: GitBranchChanged,
 });
 
+const GitBranchesGetRpc = Rpc.make("git.branches.get", {
+  error: GitBranchError,
+  payload: GitBranchesGet,
+  success: GitBranchesResult,
+});
+
+const GitBranchDeleteRpc = Rpc.make("git.branch.delete", {
+  error: GitBranchError,
+  payload: GitBranchDelete,
+  success: GitBranchDeleted,
+});
+
+const GitBranchCreateRpc = Rpc.make("git.branch.create", {
+  error: GitBranchError,
+  payload: GitBranchCreate,
+  success: GitBranchCreated,
+});
+
+const GitBranchSwitchRpc = Rpc.make("git.branch.switch", {
+  error: GitBranchError,
+  payload: GitBranchSwitch,
+  success: GitBranchSwitched,
+});
+
 const GitChangedFilesGetRpc = Rpc.make("git.changed-files.get", {
   error: GitChangedFilesError,
   payload: GitChangedFilesGet,
@@ -204,7 +329,11 @@ const GitStatusSubscribeRpc = Rpc.make("git.status.subscribe", {
 });
 
 export class LazyDiffRpcs extends RpcGroup.make(
+  GitBranchCreateRpc,
+  GitBranchDeleteRpc,
+  GitBranchSwitchRpc,
   GitBranchSubscribeRpc,
+  GitBranchesGetRpc,
   GitChangedFilesGetRpc,
   GitDiffSubscribeRpc,
   GitRepositoryGetRpc,
