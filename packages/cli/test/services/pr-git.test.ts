@@ -33,6 +33,7 @@ test("PR-backed Git service exposes committed pull request changes", async () =>
       committedStatuses: yield* git.fileStatuses("committed"),
       currentBranch: yield* git.currentBranch(),
       repositoryName: git.repositoryName,
+      reviewSource: git.reviewSource,
       unstagedDiff: yield* git.scopeDiff("unstaged"),
       unstagedStatuses: yield* git.fileStatuses("unstaged"),
     };
@@ -43,6 +44,7 @@ test("PR-backed Git service exposes committed pull request changes", async () =>
     name: "feature/pr-review",
   });
   strictEqual(result.repositoryName, "akshat-OwO/contingency#3");
+  strictEqual(result.reviewSource, "pull-request");
   deepStrictEqual(result.committedFiles, ["README.md", "src/new.ts"]);
   deepStrictEqual(result.committedStatuses, pullRequest.entries);
   strictEqual(result.committedDiff, pullRequest.patch);

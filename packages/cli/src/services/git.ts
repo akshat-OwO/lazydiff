@@ -4,6 +4,7 @@ import type {
   GitChangeScope,
   GitFileStatus,
   GitHead,
+  GitReviewSource,
   GitStatusEntry,
 } from "@lazydiff/protocol";
 import {
@@ -820,6 +821,8 @@ const make = (workingDirectory?: string) =>
       Effect.forkScoped({ startImmediately: true })
     );
 
+    const reviewSource = "working-tree" as GitReviewSource;
+
     return {
       branchChanges: SubscriptionRef.changes(branchState),
       changedFiles,
@@ -830,6 +833,7 @@ const make = (workingDirectory?: string) =>
       listBranches,
       repositoryChanges,
       repositoryName,
+      reviewSource,
       scopeDiff,
       switchBranch,
     };

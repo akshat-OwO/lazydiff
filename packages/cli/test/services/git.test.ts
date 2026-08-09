@@ -64,23 +64,23 @@ test("currentBranch represents branch and detached HEAD states", async () => {
 });
 
 test("repositoryName is the basename of the repository root", async () => {
-  const repositoryName = await Effect.gen(function* () {
+  const repository = await Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const parent = yield* fileSystem.makeTempDirectoryScoped({
       prefix: "lazydiff-git-parent-",
     });
-    const repository = path.join(parent, "demo-repo");
-    yield* fileSystem.makeDirectory(repository);
+    const repositoryPath = path.join(parent, "demo-repo");
+    yield* fileSystem.makeDirectory(repositoryPath);
     const run = (args: readonly string[]) =>
       childProcessSpawner.string(
-        ChildProcess.make("git", args, { cwd: repository })
+        ChildProcess.make("git", args, { cwd: repositoryPath })
       );
 
     yield* run(["init", "--initial-branch", "main"]);
     yield* fileSystem.writeFileString(
-      path.join(repository, "README.md"),
+      path.join(repositoryPath, "README.md"),
       "# Demo\n"
     );
     yield* run(["add", "README.md"]);
@@ -96,17 +96,21 @@ test("repositoryName is the basename of the repository root", async () => {
 
     return yield* Effect.gen(function* () {
       const git = yield* Git;
-      return git.repositoryName;
+      return {
+        repositoryName: git.repositoryName,
+        reviewSource: git.reviewSource,
+      };
     }).pipe(
       Effect.provide(
         makeGitLive({
-          workingDirectory: repository,
+          workingDirectory: repositoryPath,
         })
       )
     );
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer), Effect.runPromise);
 
-  strictEqual(repositoryName, "demo-repo");
+  strictEqual(repository.repositoryName, "demo-repo");
+  strictEqual(repository.reviewSource, "working-tree");
 });
 
 test("Git changes are separated by scope with normalized statuses", async () => {

@@ -6,7 +6,7 @@ import {
 } from "@effect/atom-react";
 import type { GitChangeScope } from "@lazydiff/protocol";
 import { Link } from "@tanstack/react-router";
-import { MessageSquareTextIcon } from "lucide-react";
+import { GitBranchIcon, MessageSquareTextIcon } from "lucide-react";
 import { useEffect } from "react";
 
 import { GitBranchPicker } from "@/components/git-branch-picker";
@@ -46,8 +46,9 @@ const changeScopeOptions: readonly {
 
 function GitBranchButton() {
   const branchChanges = useAtomValue(gitBranchChangesAtom);
+  const repository = useAtomValue(gitRepositoryAtom);
 
-  if (branchChanges._tag === "Initial") {
+  if (branchChanges._tag === "Initial" || repository._tag === "Initial") {
     return (
       <output aria-label="Connecting to Git">
         <Skeleton className="h-6 w-20" />
@@ -64,6 +65,27 @@ function GitBranchButton() {
   }
 
   const { head } = branchChanges.value.data;
+  const label =
+    head._tag === "Branch" ? head.name : `Detached @ ${head.commit}`;
+
+  if (
+    repository._tag === "Success" &&
+    repository.value.data.source === "pull-request"
+  ) {
+    return (
+      <Button
+        aria-label={`Pull request branch: ${label}`}
+        className="max-w-56"
+        disabled
+        size="xs"
+        title="Branch switching is unavailable while reviewing a pull request"
+        variant="outline"
+      >
+        <GitBranchIcon data-icon="inline-start" />
+        <span className="truncate">{label}</span>
+      </Button>
+    );
+  }
 
   return <GitBranchPicker head={head} />;
 }

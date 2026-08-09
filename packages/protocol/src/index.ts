@@ -229,9 +229,17 @@ export const GitRepositoryGet = Schema.Struct({
 
 export type GitRepositoryGet = typeof GitRepositoryGet.Type;
 
+export const GitReviewSource = Schema.Literals([
+  "working-tree",
+  "pull-request",
+]);
+
+export type GitReviewSource = typeof GitReviewSource.Type;
+
 export const GitRepositoryResult = Schema.Struct({
   data: Schema.Struct({
     name: NonEmptyString,
+    source: GitReviewSource,
   }),
   type: Schema.Literal("git.repository.result"),
 });

@@ -2,6 +2,7 @@ import type {
   GitBranch,
   GitBranchDeleteTarget,
   GitChangeScope,
+  GitReviewSource,
   GitStatusEntry,
 } from "@lazydiff/protocol";
 import { Effect, Layer, Stream, SubscriptionRef } from "effect";
@@ -81,6 +82,8 @@ const make = (pullRequest: PullRequestReview) =>
       (_name: string) => Effect.fail(prMutationError("switch branches"))
     );
 
+    const reviewSource = "pull-request" as GitReviewSource;
+
     return {
       branchChanges: SubscriptionRef.changes(branchState),
       changedFiles,
@@ -91,6 +94,7 @@ const make = (pullRequest: PullRequestReview) =>
       listBranches,
       repositoryChanges: Stream.never,
       repositoryName: `${pullRequest.owner}/${pullRequest.repo}#${pullRequest.number}`,
+      reviewSource,
       scopeDiff,
       switchBranch,
     };

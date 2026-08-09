@@ -100,7 +100,10 @@ const GitRpcHandlersLive = LazyDiffRpcs.toLayer(
         ),
       "git.repository.get": () =>
         Effect.succeed({
-          data: { name: git.repositoryName },
+          data: {
+            name: git.repositoryName,
+            source: git.reviewSource,
+          },
           type: "git.repository.result" as const,
         }),
       "git.status.get": ({ data }) =>
