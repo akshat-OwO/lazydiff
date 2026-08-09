@@ -1,4 +1,5 @@
 import {
+  GitBranchError,
   GitChangedFilesError,
   GitDiffError,
   GitStatusError,
@@ -19,6 +20,11 @@ const toGitChangedFilesError = (error: Error) =>
     message: error.message || "Unable to read changed files",
   });
 
+const toGitBranchError = (error: Error) =>
+  new GitBranchError({
+    message: error.message || "Unable to update the Git branch",
+  });
+
 const toGitDiffError = (error: Error) =>
   new GitDiffError({
     message: error.message || "Unable to read the diff",
@@ -34,12 +40,43 @@ const GitRpcHandlersLive = LazyDiffRpcs.toLayer(
     const git = yield* Git;
 
     return {
+      "git.branch.create": ({ data }) =>
+        git.createBranch(data.name).pipe(
+          Effect.map((head) => ({
+            data: { head },
+            type: "git.branch.created" as const,
+          })),
+          Effect.mapError(toGitBranchError)
+        ),
+      "git.branch.delete": ({ data }) =>
+        git
+          .deleteBranch(data)
+          .pipe(
+            Effect.as({ data: {}, type: "git.branch.deleted" as const }),
+            Effect.mapError(toGitBranchError)
+          ),
       "git.branch.subscribe": () =>
         git.branchChanges.pipe(
           Stream.map((head) => ({
             data: { head },
             type: "git.branch.changed" as const,
           }))
+        ),
+      "git.branch.switch": ({ data }) =>
+        git.switchBranch(data.name).pipe(
+          Effect.map((head) => ({
+            data: { head },
+            type: "git.branch.switched" as const,
+          })),
+          Effect.mapError(toGitBranchError)
+        ),
+      "git.branches.get": () =>
+        git.listBranches().pipe(
+          Effect.map((branches) => ({
+            data: { branches },
+            type: "git.branches.result" as const,
+          })),
+          Effect.mapError(toGitBranchError)
         ),
       "git.changed-files.get": ({ data }) =>
         git.changedFiles(data.scope, data.branch).pipe(

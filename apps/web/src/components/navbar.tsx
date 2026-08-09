@@ -9,6 +9,7 @@ import { Link } from "@tanstack/react-router";
 import { MessageSquareTextIcon } from "lucide-react";
 import { useEffect } from "react";
 
+import { GitBranchPicker } from "@/components/git-branch-picker";
 import { ModeToggle } from "@/components/mode-toggle";
 import { Button } from "@/components/ui/button";
 import {
@@ -63,14 +64,8 @@ function GitBranchButton() {
   }
 
   const { head } = branchChanges.value.data;
-  const label =
-    head._tag === "Branch" ? head.name : `Detached @ ${head.commit}`;
 
-  return (
-    <Button disabled size="xs" variant="outline">
-      {label}
-    </Button>
-  );
+  return <GitBranchPicker head={head} />;
 }
 
 function GitChangeScopeSelect() {

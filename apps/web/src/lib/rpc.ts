@@ -156,6 +156,20 @@ export const gitBranchChangesAtom = LazyDiffRpcClient.runtime.atom(
   ).pipe(Stream.retry(rpcRetrySchedule))
 );
 
+export const gitBranchesAtom = LazyDiffRpcClient.query("git.branches.get", {
+  data: {},
+  type: "git.branches.get",
+});
+
+export const gitBranchCreateMutation =
+  LazyDiffRpcClient.mutation("git.branch.create");
+
+export const gitBranchDeleteMutation =
+  LazyDiffRpcClient.mutation("git.branch.delete");
+
+export const gitBranchSwitchMutation =
+  LazyDiffRpcClient.mutation("git.branch.switch");
+
 export const gitRepositoryAtom = LazyDiffRpcClient.query(
   "git.repository.get",
   {

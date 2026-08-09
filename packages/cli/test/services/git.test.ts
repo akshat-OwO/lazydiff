@@ -416,3 +416,312 @@ test("changedFiles prefers main when both default branches exist", async () => {
 
   deepStrictEqual(files, []);
 });
+
+test("branches can be listed, switched, and created without discarding changes", async () => {
+  const result = await Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const repository = yield* fileSystem.makeTempDirectoryScoped({
+      prefix: "lazydiff-git-branches-",
+    });
+    const run = (args: readonly string[]) =>
+      childProcessSpawner.string(
+        ChildProcess.make("git", args, { cwd: repository })
+      );
+
+    yield* run(["init", "--initial-branch", "main"]);
+    yield* fileSystem.writeFileString(
+      path.join(repository, "README.md"),
+      "initial\n"
+    );
+    yield* run(["add", "README.md"]);
+    yield* run([
+      "-c",
+      "user.name=Lazydiff Test",
+      "-c",
+      "user.email=test@lazydiff.local",
+      "commit",
+      "-m",
+      "Initial commit",
+    ]);
+    yield* run(["branch", "feature/existing"]);
+    yield* fileSystem.writeFileString(
+      path.join(repository, "staged.txt"),
+      "staged\n"
+    );
+    yield* run(["add", "staged.txt"]);
+    yield* fileSystem.writeFileString(
+      path.join(repository, "README.md"),
+      "unstaged\n"
+    );
+    yield* fileSystem.writeFileString(
+      path.join(repository, "untracked.txt"),
+      "untracked\n"
+    );
+
+    return yield* Effect.gen(function* () {
+      const git = yield* Git;
+      const before = yield* git.listBranches();
+      const switched = yield* git.switchBranch("feature/existing");
+      const statusAfterSwitch = yield* run(["status", "--porcelain"]);
+      const created = yield* git.createBranch("feature/created");
+      const after = yield* git.listBranches();
+      const invalidError = yield* git
+        .createBranch("invalid..name")
+        .pipe(Effect.flip);
+
+      return {
+        after,
+        before,
+        created,
+        invalidError,
+        statusAfterSwitch,
+        switched,
+      };
+    }).pipe(Effect.provide(makeGitLive({ workingDirectory: repository })));
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer), Effect.runPromise);
+
+  deepStrictEqual(result.before[0], {
+    current: true,
+    isRemote: false,
+    localName: "main",
+    name: "main",
+  });
+  deepStrictEqual(result.switched, {
+    _tag: "Branch",
+    name: "feature/existing",
+  });
+  deepStrictEqual(result.created, {
+    _tag: "Branch",
+    name: "feature/created",
+  });
+  strictEqual(
+    result.after.find(({ name }) => name === "feature/created")?.current,
+    true
+  );
+  strictEqual(result.statusAfterSwitch.includes("M README.md"), true);
+  strictEqual(result.statusAfterSwitch.includes("A  staged.txt"), true);
+  strictEqual(result.statusAfterSwitch.includes("?? untracked.txt"), true);
+  strictEqual(
+    result.invalidError.message.includes("not a valid branch name"),
+    true
+  );
+});
+
+test("switchBranch creates a tracking branch for a remote-only ref", async () => {
+  const result = await Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const repository = yield* fileSystem.makeTempDirectoryScoped({
+      prefix: "lazydiff-git-remote-",
+    });
+    const remote = yield* fileSystem.makeTempDirectoryScoped({
+      prefix: "lazydiff-git-remote-bare-",
+    });
+    const run = (args: readonly string[], cwd = repository) =>
+      childProcessSpawner.string(ChildProcess.make("git", args, { cwd }));
+
+    yield* run(["init", "--bare"], remote);
+    yield* run(["init", "--initial-branch", "main"]);
+    yield* fileSystem.writeFileString(
+      path.join(repository, "README.md"),
+      "initial\n"
+    );
+    yield* run(["add", "README.md"]);
+    yield* run([
+      "-c",
+      "user.name=Lazydiff Test",
+      "-c",
+      "user.email=test@lazydiff.local",
+      "commit",
+      "-m",
+      "Initial commit",
+    ]);
+    yield* run(["remote", "add", "origin", remote]);
+    yield* run(["push", "-u", "origin", "main"]);
+    yield* run(["branch", "feature/remote-only"]);
+    yield* run(["push", "origin", "feature/remote-only"]);
+    yield* run(["branch", "-D", "feature/remote-only"]);
+
+    return yield* Effect.gen(function* () {
+      const git = yield* Git;
+      const before = yield* git.listBranches();
+      const head = yield* git.switchBranch("origin/feature/remote-only");
+      const upstream = yield* run([
+        "rev-parse",
+        "--abbrev-ref",
+        "--symbolic-full-name",
+        "@{upstream}",
+      ]).pipe(Effect.map((output) => output.trim()));
+
+      return { before, head, upstream };
+    }).pipe(Effect.provide(makeGitLive({ workingDirectory: repository })));
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer), Effect.runPromise);
+
+  deepStrictEqual(
+    result.before.find(({ name }) => name === "origin/feature/remote-only"),
+    {
+      current: false,
+      isRemote: true,
+      name: "origin/feature/remote-only",
+      remoteName: "origin/feature/remote-only",
+    }
+  );
+  deepStrictEqual(result.head, {
+    _tag: "Branch",
+    name: "feature/remote-only",
+  });
+  strictEqual(result.upstream, "origin/feature/remote-only");
+});
+
+test("switchBranch leaves the current branch and files unchanged on checkout conflict", async () => {
+  const result = await Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const repository = yield* fileSystem.makeTempDirectoryScoped({
+      prefix: "lazydiff-git-switch-conflict-",
+    });
+    const run = (args: readonly string[]) =>
+      childProcessSpawner.string(
+        ChildProcess.make("git", args, { cwd: repository })
+      );
+    const commit = (message: string) =>
+      run([
+        "-c",
+        "user.name=Lazydiff Test",
+        "-c",
+        "user.email=test@lazydiff.local",
+        "commit",
+        "-m",
+        message,
+      ]);
+    const filePath = path.join(repository, "tracked.txt");
+
+    yield* run(["init", "--initial-branch", "main"]);
+    yield* fileSystem.writeFileString(filePath, "initial\n");
+    yield* run(["add", "tracked.txt"]);
+    yield* commit("Initial commit");
+    yield* run(["checkout", "-b", "feature/conflict"]);
+    yield* fileSystem.writeFileString(filePath, "feature\n");
+    yield* run(["add", "tracked.txt"]);
+    yield* commit("Feature change");
+    yield* run(["checkout", "main"]);
+    yield* fileSystem.writeFileString(filePath, "local change\n");
+
+    return yield* Effect.gen(function* () {
+      const git = yield* Git;
+      const checkoutError = yield* git
+        .switchBranch("feature/conflict")
+        .pipe(Effect.flip);
+      const head = yield* git.currentBranch();
+      const contents = yield* fileSystem.readFileString(filePath);
+
+      return { checkoutError, contents, head };
+    }).pipe(Effect.provide(makeGitLive({ workingDirectory: repository })));
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer), Effect.runPromise);
+
+  strictEqual(
+    result.checkoutError.message.includes("would be overwritten by checkout"),
+    true
+  );
+  deepStrictEqual(result.head, { _tag: "Branch", name: "main" });
+  strictEqual(result.contents, "local change\n");
+});
+
+test("deleteBranch deletes available local and remote refs and protects the current branch", async () => {
+  const result = await Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const repository = yield* fileSystem.makeTempDirectoryScoped({
+      prefix: "lazydiff-git-delete-",
+    });
+    const remote = yield* fileSystem.makeTempDirectoryScoped({
+      prefix: "lazydiff-git-delete-remote-",
+    });
+    const run = (args: readonly string[], cwd = repository) =>
+      childProcessSpawner.string(ChildProcess.make("git", args, { cwd }));
+
+    yield* run(["init", "--bare"], remote);
+    yield* run(["init", "--initial-branch", "main"]);
+    yield* fileSystem.writeFileString(
+      path.join(repository, "README.md"),
+      "initial\n"
+    );
+    yield* run(["add", "README.md"]);
+    yield* run([
+      "-c",
+      "user.name=Lazydiff Test",
+      "-c",
+      "user.email=test@lazydiff.local",
+      "commit",
+      "-m",
+      "Initial commit",
+    ]);
+    yield* run(["remote", "add", "origin", remote]);
+    yield* run(["push", "-u", "origin", "main"]);
+    yield* run(["branch", "feature/delete-both"]);
+    yield* run(["push", "-u", "origin", "feature/delete-both"]);
+    yield* run(["branch", "feature/local-only"]);
+
+    return yield* Effect.gen(function* () {
+      const git = yield* Git;
+      const listed = yield* git.listBranches();
+      const paired = listed.find(({ name }) => name === "feature/delete-both");
+      const localOnly = listed.find(
+        ({ name }) => name === "feature/local-only"
+      );
+
+      yield* git.deleteBranch({
+        localName: "feature/local-only",
+        target: "local",
+      });
+      yield* git.deleteBranch({
+        localName: "feature/delete-both",
+        remoteName: "origin/feature/delete-both",
+        target: "both",
+      });
+      const currentError = yield* git
+        .deleteBranch({ localName: "main", target: "local" })
+        .pipe(Effect.flip);
+      const localBranches = yield* run(["branch", "--format=%(refname:short)"]);
+      const remoteBranches = yield* run([
+        "branch",
+        "--remotes",
+        "--format=%(refname:short)",
+      ]);
+
+      return {
+        currentError,
+        localBranches,
+        localOnly,
+        paired,
+        remoteBranches,
+      };
+    }).pipe(Effect.provide(makeGitLive({ workingDirectory: repository })));
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer), Effect.runPromise);
+
+  deepStrictEqual(result.paired, {
+    current: false,
+    isRemote: false,
+    localName: "feature/delete-both",
+    name: "feature/delete-both",
+    remoteName: "origin/feature/delete-both",
+  });
+  deepStrictEqual(result.localOnly, {
+    current: false,
+    isRemote: false,
+    localName: "feature/local-only",
+    name: "feature/local-only",
+  });
+  strictEqual(result.localBranches.includes("feature/delete-both"), false);
+  strictEqual(result.localBranches.includes("feature/local-only"), false);
+  strictEqual(result.remoteBranches.includes("feature/delete-both"), false);
+  strictEqual(
+    result.currentError.message.includes("currently checked out branch"),
+    true
+  );
+});
