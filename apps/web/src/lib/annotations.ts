@@ -28,6 +28,10 @@ export interface AnnotationDraft {
 
 export const annotationsAtom = Atom.make<readonly DiffAnnotation[]>([]);
 
+export const sentAnnotationIdsAtom = Atom.make<ReadonlySet<string>>(
+  new Set<string>()
+);
+
 export const annotationDraftAtom = Atom.make<AnnotationDraft | null>(null);
 
 export const annotationsSidebarOpenAtom = Atom.make(false);
@@ -37,27 +41,45 @@ export const annotationFocusAtom = Atom.make<{
   readonly filePath: string;
 } | null>(null);
 
-export function createAnnotationId(): string {
-  return crypto.randomUUID();
-}
+export const createAnnotationId = (): string => crypto.randomUUID();
 
-export function removeAnnotation(
+export const removeAnnotation = (
   annotations: readonly DiffAnnotation[],
   annotationId: string
-): readonly DiffAnnotation[] {
-  return annotations.filter((annotation) => annotation.id !== annotationId);
-}
+): readonly DiffAnnotation[] =>
+  annotations.filter((annotation) => annotation.id !== annotationId);
 
 /**
  * Annotations belong to the change scope they were created in, so switching
  * Unstaged/Staged/Committed never projects comments onto another dataset.
  */
-export function annotationsForScope(
+export const annotationsForScope = (
   annotations: readonly DiffAnnotation[],
   scope: GitChangeScope
-): readonly DiffAnnotation[] {
-  return annotations.filter((annotation) => annotation.scope === scope);
-}
+): readonly DiffAnnotation[] =>
+  annotations.filter((annotation) => annotation.scope === scope);
+
+/**
+ * Pending annotations that have not been posted to the remote pull request.
+ */
+export const unsentAnnotations = (
+  annotations: readonly DiffAnnotation[],
+  sentAnnotationIds: ReadonlySet<string>
+): readonly DiffAnnotation[] =>
+  annotations.filter((annotation) => !sentAnnotationIds.has(annotation.id));
+
+export const markAnnotationsSent = (
+  sentAnnotationIds: ReadonlySet<string>,
+  annotationIds: readonly string[]
+): ReadonlySet<string> => {
+  const next = new Set(sentAnnotationIds);
+
+  for (const annotationId of annotationIds) {
+    next.add(annotationId);
+  }
+
+  return next;
+};
 
 /**
  * Only attach an annotation to the live diff when the chosen snippet is still

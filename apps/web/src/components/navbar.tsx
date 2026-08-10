@@ -32,6 +32,7 @@ import {
   annotationsAtom,
   annotationsForScope,
   annotationsSidebarOpenAtom,
+  sentAnnotationIdsAtom,
 } from "@/lib/annotations";
 import { formatLazydiffTitle } from "@/lib/app-title";
 import {
@@ -175,7 +176,9 @@ function AnnotationsToggle() {
 function PrReviewSessionToggle() {
   const repository = useAtomValue(gitRepositoryAtom);
   const annotations = useAtomValue(annotationsAtom);
+  const sentAnnotationIds = useAtomValue(sentAnnotationIdsAtom);
   const setAnnotations = useAtomSet(annotationsAtom);
+  const setSentAnnotationIds = useAtomSet(sentAnnotationIdsAtom);
   const [sessionActive, setSessionActive] = useAtom(prReviewSessionActiveAtom);
 
   if (
@@ -196,6 +199,7 @@ function PrReviewSessionToggle() {
           clearPrReviewSession(pullRequest);
           setSessionActive(false);
           setAnnotations([]);
+          setSentAnnotationIds(new Set());
         }}
         size="xs"
         title="Stop persisting annotations for this pull request"
@@ -212,7 +216,7 @@ function PrReviewSessionToggle() {
     <Button
       aria-label="Start review"
       onClick={() => {
-        writePrReviewSession(pullRequest, annotations);
+        writePrReviewSession(pullRequest, annotations, sentAnnotationIds);
         setSessionActive(true);
       }}
       size="xs"

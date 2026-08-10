@@ -13,7 +13,7 @@ import {
   Trash2Icon,
   XIcon,
 } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { HighlightedCode } from "@/components/highlighted-code";
 import { TypesetMarkdown } from "@/components/typeset-markdown";
@@ -25,7 +25,10 @@ import {
   annotationsForScope,
   annotationsSidebarOpenAtom,
   formatAnnotationsMarkdown,
+  markAnnotationsSent,
   removeAnnotation,
+  sentAnnotationIdsAtom,
+  unsentAnnotations,
 } from "@/lib/annotations";
 import type { DiffAnnotation } from "@/lib/annotations";
 import { copyTextToClipboard } from "@/lib/clipboard";
@@ -42,16 +45,23 @@ function AnnotationCard({
   index,
   onDelete,
   onLink,
+  sent,
 }: {
   readonly annotation: DiffAnnotation;
   readonly index: number;
   readonly onDelete: (annotationId: string) => void;
   readonly onLink: (annotation: DiffAnnotation) => void;
+  readonly sent: boolean;
 }) {
   return (
     <article className="border-border space-y-3 border-b px-4 py-4">
       <div className="flex items-center justify-between gap-2">
-        <h3 className="text-sm font-semibold">Annotation {index + 1}</h3>
+        <div className="min-w-0">
+          <h3 className="text-sm font-semibold">Annotation {index + 1}</h3>
+          {sent ? (
+            <p className="text-muted-foreground text-xs">Sent to remote</p>
+          ) : null}
+        </div>
         <div className="flex items-center gap-0.5">
           <Button
             aria-label={`Go to annotation ${index + 1}`}
@@ -89,7 +99,7 @@ function AnnotationCard({
 type CopyState = "idle" | "copying" | "copied" | "failed";
 type SendState = "idle" | "sending" | "sent" | "failed";
 
-function copyButtonLabel(copyState: CopyState, compact: boolean) {
+const copyButtonLabel = (copyState: CopyState, compact: boolean) => {
   if (copyState === "copying") {
     return "Copying…";
   }
@@ -103,9 +113,9 @@ function copyButtonLabel(copyState: CopyState, compact: boolean) {
   }
 
   return compact ? "Copy" : "Copy annotations";
-}
+};
 
-function sendButtonLabel(sendState: SendState) {
+const sendButtonLabel = (sendState: SendState) => {
   if (sendState === "sending") {
     return "Sending…";
   }
@@ -119,19 +129,40 @@ function sendButtonLabel(sendState: SendState) {
   }
 
   return "Send to remote";
-}
+};
+
+const annotationsSummary = (
+  savedCount: number,
+  unsentCount: number
+): string => {
+  if (savedCount === 0) {
+    return "No annotations yet";
+  }
+
+  if (unsentCount === 0) {
+    return `${savedCount} saved · all sent`;
+  }
+
+  return `${unsentCount} unsent · ${savedCount} saved`;
+};
 
 function AnnotationsSidebar() {
   const scope = useAtomValue(gitChangeScopeAtom);
   const repository = useAtomValue(gitRepositoryAtom);
   const allAnnotations = useAtomValue(annotationsAtom);
+  const sentAnnotationIds = useAtomValue(sentAnnotationIdsAtom);
   const setAnnotations = useAtomSet(annotationsAtom);
+  const setSentAnnotationIds = useAtomSet(sentAnnotationIdsAtom);
   const setFocus = useAtomSet(annotationFocusAtom);
   const sendAnnotations = useAtomSet(githubPrAnnotationsPostMutation, {
     mode: "promise",
   });
   const refreshThreads = useAtomRefresh(githubPrReviewThreadsAtom);
   const annotations = annotationsForScope(allAnnotations, scope);
+  const pendingAnnotations = useMemo(
+    () => unsentAnnotations(annotations, sentAnnotationIds),
+    [annotations, sentAnnotationIds]
+  );
   const [open, setOpen] = useAtom(annotationsSidebarOpenAtom);
   const [copyState, setCopyState] = useState<CopyState>("idle");
   const [sendState, setSendState] = useState<SendState>("idle");
@@ -165,18 +196,18 @@ function AnnotationsSidebar() {
   };
 
   const sendAnnotationsToRemote = () => {
-    if (sendState === "sending" || annotations.length === 0) {
+    if (sendState === "sending" || pendingAnnotations.length === 0) {
       return;
     }
 
-    const comments = annotations.map((annotation) =>
+    const comments = pendingAnnotations.map((annotation) =>
       annotationRangeToGithubReviewComment({
         body: annotation.comment,
         filePath: annotation.filePath,
         range: annotation.range,
       })
     );
-    const sentIds = new Set(annotations.map((annotation) => annotation.id));
+    const pendingIds = pendingAnnotations.map((annotation) => annotation.id);
 
     setSendError(undefined);
     setSendState("sending");
@@ -189,8 +220,8 @@ function AnnotationsSidebar() {
             type: "github.pr.annotations.post",
           },
         });
-        setAnnotations((current) =>
-          current.filter((annotation) => !sentIds.has(annotation.id))
+        setSentAnnotationIds((current) =>
+          markAnnotationsSent(current, pendingIds)
         );
         refreshThreads();
         setSendState("sent");
@@ -209,6 +240,15 @@ function AnnotationsSidebar() {
 
   const deleteAnnotation = (annotationId: string) => {
     setAnnotations((current) => removeAnnotation(current, annotationId));
+    setSentAnnotationIds((current) => {
+      if (!current.has(annotationId)) {
+        return current;
+      }
+
+      const next = new Set(current);
+      next.delete(annotationId);
+      return next;
+    });
   };
 
   const linkToAnnotation = (annotation: DiffAnnotation) => {
@@ -229,9 +269,7 @@ function AnnotationsSidebar() {
         <div>
           <p className="text-sm font-semibold">Annotations</p>
           <p className="text-muted-foreground text-xs">
-            {annotations.length === 0
-              ? "No annotations yet"
-              : `${annotations.length} saved`}
+            {annotationsSummary(annotations.length, pendingAnnotations.length)}
           </p>
         </div>
         <Button
@@ -262,6 +300,7 @@ function AnnotationsSidebar() {
               key={annotation.id}
               onDelete={deleteAnnotation}
               onLink={linkToAnnotation}
+              sent={sentAnnotationIds.has(annotation.id)}
             />
           ))
         )}
@@ -287,7 +326,9 @@ function AnnotationsSidebar() {
           {isPullRequestReview ? (
             <Button
               className="w-full"
-              disabled={annotations.length === 0 || sendState === "sending"}
+              disabled={
+                pendingAnnotations.length === 0 || sendState === "sending"
+              }
               onClick={sendAnnotationsToRemote}
               type="button"
               variant="outline"

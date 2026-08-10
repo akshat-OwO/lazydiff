@@ -9,6 +9,7 @@ export interface PersistedPrReviewSession {
   readonly number: number;
   readonly owner: string;
   readonly repo: string;
+  readonly sentAnnotationIds: readonly string[];
   readonly startedAt: string;
 }
 
@@ -67,13 +68,15 @@ const isPersistedPrReviewSession = (
     typeof record.repo === "string" &&
     typeof record.startedAt === "string" &&
     Array.isArray(record.annotations) &&
-    record.annotations.every(isDiffAnnotation)
+    record.annotations.every(isDiffAnnotation) &&
+    Array.isArray(record.sentAnnotationIds) &&
+    record.sentAnnotationIds.every((id) => typeof id === "string")
   );
 };
 
-export function readPrReviewSession(
+export const readPrReviewSession = (
   pullRequest: Pick<GitPullRequestMeta, "owner" | "repo" | "number">
-): PersistedPrReviewSession | null {
+): PersistedPrReviewSession | null => {
   try {
     const raw = window.localStorage.getItem(storageKeyFor(pullRequest));
 
@@ -82,22 +85,56 @@ export function readPrReviewSession(
     }
 
     const parsed: unknown = JSON.parse(raw);
-    return isPersistedPrReviewSession(parsed) ? parsed : null;
+
+    if (isPersistedPrReviewSession(parsed)) {
+      return parsed;
+    }
+
+    // Older sessions omitted sentAnnotationIds; accept them as unsynced.
+    if (
+      parsed !== null &&
+      typeof parsed === "object" &&
+      Array.isArray((parsed as { annotations?: unknown }).annotations) &&
+      typeof (parsed as { headSha?: unknown }).headSha === "string" &&
+      typeof (parsed as { number?: unknown }).number === "number" &&
+      typeof (parsed as { owner?: unknown }).owner === "string" &&
+      typeof (parsed as { repo?: unknown }).repo === "string" &&
+      typeof (parsed as { startedAt?: unknown }).startedAt === "string" &&
+      (parsed as { annotations: unknown[] }).annotations.every(isDiffAnnotation)
+    ) {
+      const legacy = parsed as {
+        annotations: readonly DiffAnnotation[];
+        headSha: string;
+        number: number;
+        owner: string;
+        repo: string;
+        startedAt: string;
+      };
+
+      return {
+        ...legacy,
+        sentAnnotationIds: [],
+      };
+    }
+
+    return null;
   } catch {
     return null;
   }
-}
+};
 
-export function writePrReviewSession(
+export const writePrReviewSession = (
   pullRequest: GitPullRequestMeta,
-  annotations: readonly DiffAnnotation[]
-): void {
+  annotations: readonly DiffAnnotation[],
+  sentAnnotationIds: ReadonlySet<string>
+): void => {
   const session: PersistedPrReviewSession = {
     annotations,
     headSha: pullRequest.headSha,
     number: pullRequest.number,
     owner: pullRequest.owner,
     repo: pullRequest.repo,
+    sentAnnotationIds: [...sentAnnotationIds],
     startedAt: new Date().toISOString(),
   };
 
@@ -109,14 +146,14 @@ export function writePrReviewSession(
   } catch {
     // Annotation editing still works when browser storage is unavailable.
   }
-}
+};
 
-export function clearPrReviewSession(
+export const clearPrReviewSession = (
   pullRequest: Pick<GitPullRequestMeta, "owner" | "repo" | "number">
-): void {
+): void => {
   try {
     window.localStorage.removeItem(storageKeyFor(pullRequest));
   } catch {
     // Clearing is best-effort when browser storage is unavailable.
   }
-}
+};

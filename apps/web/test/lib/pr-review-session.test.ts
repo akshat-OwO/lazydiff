@@ -47,14 +47,15 @@ const installMemoryLocalStorage = () => {
   });
 };
 
-test("writePrReviewSession round-trips annotations for a pull request", () => {
+test("writePrReviewSession round-trips annotations and sent ids", () => {
   installMemoryLocalStorage();
   clearPrReviewSession(pullRequest);
-  writePrReviewSession(pullRequest, [annotation]);
+  writePrReviewSession(pullRequest, [annotation], new Set(["annotation-1"]));
 
   const stored = readPrReviewSession(pullRequest);
   strictEqual(stored?.number, 13);
   deepStrictEqual(stored?.annotations, [annotation]);
+  deepStrictEqual(stored?.sentAnnotationIds, ["annotation-1"]);
 
   clearPrReviewSession(pullRequest);
   strictEqual(readPrReviewSession(pullRequest), null);

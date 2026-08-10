@@ -26,6 +26,8 @@ import {
   annotationsAtom,
   annotationsForScope,
   draftMatchesFileDiff,
+  sentAnnotationIdsAtom,
+  unsentAnnotations,
 } from "@/lib/annotations";
 import type { DiffAnnotation } from "@/lib/annotations";
 import { fileDiffAnchorId } from "@/lib/file-diff-anchor";
@@ -146,11 +148,16 @@ function FileDiffCard({
   const scope = useAtomValue(gitChangeScopeAtom);
   const [draft, setDraft] = useAtom(annotationDraftAtom);
   const annotations = useAtomValue(annotationsAtom);
+  const sentAnnotationIds = useAtomValue(sentAnnotationIdsAtom);
   const reviewThreads = useAtomValue(githubPrReviewThreadsAtom);
   const [selectionResetKey, setSelectionResetKey] = useState(0);
   const scopedAnnotations = useMemo(
     () => annotationsForScope(annotations, scope),
     [annotations, scope]
+  );
+  const pendingAnnotations = useMemo(
+    () => unsentAnnotations(scopedAnnotations, sentAnnotationIds),
+    [scopedAnnotations, sentAnnotationIds]
   );
   const draftForFile =
     draft !== null &&
@@ -161,10 +168,10 @@ function FileDiffCard({
       : null;
   const attachedForFile = useMemo(
     () =>
-      scopedAnnotations.filter((annotation) =>
+      pendingAnnotations.filter((annotation) =>
         annotationMatchesFileDiff(annotation, fileDiff)
       ),
-    [fileDiff, scopedAnnotations]
+    [fileDiff, pendingAnnotations]
   );
   const remoteThreadsForFile = useMemo(() => {
     if (reviewThreads._tag !== "Success") {
