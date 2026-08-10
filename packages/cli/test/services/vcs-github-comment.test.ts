@@ -19,15 +19,9 @@ const pullRequestRef: PullRequestRef = {
 
 const makeRecordingHttpClient = (
   handler: (request: HttpClientRequest.HttpClientRequest) => Response
-) =>
-  HttpClient.makeWith(
-    (requestEffect) =>
-      requestEffect.pipe(
-        Effect.flatMap((request) =>
-          Effect.succeed(HttpClientResponse.fromWeb(request, handler(request)))
-        )
-      ),
-    (request) => Effect.succeed(request)
+): HttpClient.HttpClient =>
+  HttpClient.make((request, _url, _signal, _fiber) =>
+    Effect.succeed(HttpClientResponse.fromWeb(request, handler(request)))
   );
 
 test("createPullRequestIssueComment posts markdown to the issues comments API", async () => {
