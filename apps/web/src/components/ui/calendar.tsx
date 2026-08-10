@@ -9,7 +9,8 @@ import * as React from "react";
 import { DayPicker, getDefaultClassNames } from "react-day-picker";
 import type { CustomComponents, DayButton, Locale } from "react-day-picker";
 
-import { Button, buttonVariants } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button-variants";
 import { cn } from "@/lib/utils";
 
 const CalendarLocaleContext = React.createContext<Partial<Locale> | undefined>(
