@@ -7,10 +7,10 @@ import type {
 } from "@lazydiff/protocol";
 import { Effect, Layer, Stream, SubscriptionRef } from "effect";
 
-import { splitUnifiedPatch, toDiffBatches } from "@/lib/diff-batches";
+import { joinPatchFragments } from "@/lib/diff-batches";
 import type { DiffBatch } from "@/lib/diff-batches";
 import { Git } from "@/services/git";
-import type { PullRequestReview } from "@/services/vcs";
+import type { PullRequestSession, VcsError } from "@/services/vcs";
 
 const branchHead = (name: string) =>
   ({
@@ -24,32 +24,78 @@ const prMutationError = (action: string) =>
 const forCommittedScope = <A>(scope: GitChangeScope, value: A, empty: A) =>
   Effect.succeed(scope === "committed" ? value : empty);
 
-const make = (pullRequest: PullRequestReview) =>
+interface LoadState {
+  readonly complete: boolean;
+  readonly entries: GitStatusEntry[];
+  readonly error: VcsError | undefined;
+  readonly patches: string[];
+}
+
+const initialState: LoadState = {
+  complete: false,
+  entries: [],
+  error: undefined,
+  patches: [],
+};
+
+const make = (session: PullRequestSession) =>
   Effect.gen(function* () {
-    const head = branchHead(pullRequest.headRefName);
+    const head = branchHead(session.headRefName);
     const branchState = yield* SubscriptionRef.make(head);
-    const committedEntries: GitStatusEntry[] = [...pullRequest.entries];
-    const committedFiles: string[] = committedEntries.map(({ path }) => path);
-    const committedFilePatches = splitUnifiedPatch(pullRequest.patch);
-    const committedDiffBatches = toDiffBatches(committedFilePatches);
+    const loadState = yield* SubscriptionRef.make(initialState);
     const branches: GitBranch[] = [
       {
         current: true,
         isRemote: false,
-        localName: pullRequest.headRefName,
-        name: pullRequest.headRefName,
+        localName: session.headRefName,
+        name: session.headRefName,
       },
       {
         current: false,
         isRemote: false,
-        localName: pullRequest.baseRefName,
-        name: pullRequest.baseRefName,
+        localName: session.baseRefName,
+        name: session.baseRefName,
       },
     ];
 
+    // Files load in the background so the review server can serve immediately.
+    yield* session.fileBatches.pipe(
+      Stream.runForEach((batch) =>
+        SubscriptionRef.update(loadState, (state) => ({
+          ...state,
+          entries: [...state.entries, ...batch.entries],
+          patches: [...state.patches, batch.patch],
+        }))
+      ),
+      Effect.matchEffect({
+        onFailure: (error: VcsError) =>
+          SubscriptionRef.update(loadState, (state) => ({
+            ...state,
+            complete: true,
+            error,
+          })),
+        onSuccess: () =>
+          SubscriptionRef.update(loadState, (state) => ({
+            ...state,
+            complete: true,
+          })),
+      }),
+      Effect.forkScoped
+    );
+
+    const currentState = SubscriptionRef.get(loadState);
+
     const changedFiles = Effect.fn("lazydiff/services/prGit/changedFiles")(
       (scope: GitChangeScope, _branch?: string) =>
-        forCommittedScope(scope, committedFiles, [] as string[])
+        currentState.pipe(
+          Effect.flatMap((state) =>
+            forCommittedScope(
+              scope,
+              state.entries.map(({ path }) => path),
+              [] as string[]
+            )
+          )
+        )
     );
 
     const createBranch = Effect.fn("lazydiff/services/prGit/createBranch")(
@@ -70,7 +116,11 @@ const make = (pullRequest: PullRequestReview) =>
 
     const fileStatuses = Effect.fn("lazydiff/services/prGit/fileStatuses")(
       (scope: GitChangeScope, _branch?: string) =>
-        forCommittedScope(scope, committedEntries, [] as GitStatusEntry[])
+        currentState.pipe(
+          Effect.flatMap((state) =>
+            forCommittedScope(scope, [...state.entries], [] as GitStatusEntry[])
+          )
+        )
     );
 
     const listBranches = Effect.fn("lazydiff/services/prGit/listBranches")(() =>
@@ -79,22 +129,71 @@ const make = (pullRequest: PullRequestReview) =>
 
     const scopeDiff = Effect.fn("lazydiff/services/prGit/scopeDiff")(
       (scope: GitChangeScope, _branch?: string) =>
-        forCommittedScope(scope, pullRequest.patch, "")
+        currentState.pipe(
+          Effect.flatMap((state) =>
+            forCommittedScope(scope, joinPatchFragments(state.patches), "")
+          )
+        )
     );
 
-    const scopeDiffBatches = (
+    /** Emits loaded batches, then every batch that arrives afterwards. */
+    const diffBatches = (
       scope: GitChangeScope,
       _branch?: string
-    ): Stream.Stream<DiffBatch> => {
+    ): Stream.Stream<DiffBatch, VcsError> => {
       if (scope !== "committed") {
-        return Stream.succeed({
-          complete: true,
-          patch: "",
-          reset: true,
-        });
+        return Stream.succeed({ complete: true, patch: "", reset: true });
       }
 
-      return Stream.fromIterable(committedDiffBatches);
+      return SubscriptionRef.changes(loadState).pipe(
+        Stream.mapAccum(
+          () => 0,
+          (emitted, state) => {
+            const pending = state.patches.slice(emitted);
+
+            if (pending.length === 0 && !state.complete) {
+              return [emitted, []];
+            }
+
+            return [
+              state.patches.length,
+              [
+                {
+                  complete: state.complete,
+                  patch: joinPatchFragments(pending),
+                  reset: emitted === 0,
+                },
+              ],
+            ];
+          }
+        ),
+        Stream.takeUntil((batch) => batch.complete),
+        Stream.concat(
+          Stream.unwrap(
+            currentState.pipe(
+              Effect.map((state) =>
+                state.error === undefined
+                  ? Stream.empty
+                  : Stream.fail(state.error)
+              )
+            )
+          )
+        )
+      );
+    };
+
+    const statusChanges = (
+      scope: GitChangeScope,
+      _branch?: string
+    ): Stream.Stream<GitStatusEntry[], VcsError> => {
+      if (scope !== "committed") {
+        return Stream.succeed([] as GitStatusEntry[]);
+      }
+
+      return SubscriptionRef.changes(loadState).pipe(
+        Stream.takeUntil((state) => state.complete),
+        Stream.map((state) => [...state.entries])
+      );
     };
 
     const switchBranch = Effect.fn("lazydiff/services/prGit/switchBranch")(
@@ -109,16 +208,17 @@ const make = (pullRequest: PullRequestReview) =>
       createBranch,
       currentBranch,
       deleteBranch,
+      diffBatches,
       fileStatuses,
       listBranches,
       repositoryChanges: Stream.never,
-      repositoryName: `${pullRequest.owner}/${pullRequest.repo}#${pullRequest.number}`,
+      repositoryName: `${session.owner}/${session.repo}#${session.number}`,
       reviewSource,
       scopeDiff,
-      scopeDiffBatches,
+      statusChanges,
       switchBranch,
     };
   });
 
-export const makePrGitLive = (pullRequest: PullRequestReview) =>
-  Layer.effect(Git, make(pullRequest));
+export const makePrGitLive = (session: PullRequestSession) =>
+  Layer.effect(Git, make(session));

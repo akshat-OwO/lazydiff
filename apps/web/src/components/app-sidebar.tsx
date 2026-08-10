@@ -1,4 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
+import type { FileDiffMetadata } from "@pierre/diffs";
 import { useLocation } from "@tanstack/react-router";
 import { useMemo } from "react";
 
@@ -11,8 +12,9 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { fromLocationHash } from "@/lib/file-diff-anchor";
 import { sumChangedLines } from "@/lib/file-diff-summary";
-import { parsePatchFileDiffs } from "@/lib/parse-patch-file-diffs";
 import { gitDiffAtom, gitStatusAtom } from "@/lib/rpc";
+
+const emptyFileDiffs: readonly FileDiffMetadata[] = [];
 
 function AppSidebar() {
   const gitStatus = useAtomValue(gitStatusAtom);
@@ -20,16 +22,14 @@ function AppSidebar() {
   const activePath = useLocation({
     select: (location) => fromLocationHash(location.hash),
   });
-  const patch = gitDiff._tag === "Success" ? gitDiff.value.data.patch : "";
+  const fileDiffs =
+    gitDiff._tag === "Success" ? gitDiff.value.fileDiffs : emptyFileDiffs;
   const diffComplete =
-    gitDiff._tag === "Success" ? gitDiff.value.data.complete : true;
-  const { additions, deletions } = useMemo(() => {
-    if (patch.length === 0) {
-      return { additions: 0, deletions: 0 };
-    }
-
-    return sumChangedLines(parsePatchFileDiffs(patch));
-  }, [patch]);
+    gitDiff._tag === "Success" ? gitDiff.value.complete : true;
+  const { additions, deletions } = useMemo(
+    () => sumChangedLines(fileDiffs),
+    [fileDiffs]
+  );
 
   return (
     <Sidebar

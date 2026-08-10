@@ -87,22 +87,15 @@ const GitRpcHandlersLive = LazyDiffRpcs.toLayer(
           Effect.mapError(toGitChangedFilesError)
         ),
       "git.diff.subscribe": ({ data }) =>
-        Stream.merge(
-          Stream.make("initial" as const),
-          git.repositoryChanges
-        ).pipe(
-          Stream.switchMap(() =>
-            git.scopeDiffBatches(data.scope, data.branch).pipe(
-              Stream.map((batch) => ({
-                data: {
-                  complete: batch.complete,
-                  patch: batch.patch,
-                  reset: batch.reset,
-                },
-                type: "git.diff.result" as const,
-              }))
-            )
-          ),
+        git.diffBatches(data.scope, data.branch).pipe(
+          Stream.map((batch) => ({
+            data: {
+              complete: batch.complete,
+              patch: batch.patch,
+              reset: batch.reset,
+            },
+            type: "git.diff.result" as const,
+          })),
           Stream.mapError(toGitDiffError)
         ),
       "git.repository.get": () =>
@@ -122,11 +115,7 @@ const GitRpcHandlersLive = LazyDiffRpcs.toLayer(
           Effect.mapError(toGitStatusError)
         ),
       "git.status.subscribe": ({ data }) =>
-        Stream.merge(
-          Stream.make("initial" as const),
-          git.repositoryChanges
-        ).pipe(
-          Stream.mapEffect(() => git.fileStatuses(data.scope, data.branch)),
+        git.statusChanges(data.scope, data.branch).pipe(
           Stream.map((entries) => ({
             data: { entries },
             type: "git.status.result" as const,

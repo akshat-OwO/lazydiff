@@ -130,14 +130,14 @@ export const commands = Command.make(
   Effect.fnUntraced(function* ({ noBrowser, pr }) {
     if (Option.isSome(pr)) {
       const vcs = yield* VCSService;
-      const pullRequest = yield* vcs.fetchPullRequest(pr.value);
+      const session = yield* vcs.openPullRequest(pr.value);
 
       yield* Console.log(
-        `Loaded pull request ${pullRequest.url} (${pullRequest.title})`
+        `Reviewing pull request ${session.url} (${session.title})`
       );
 
       return yield* runReviewServer({ noBrowser }).pipe(
-        Effect.provide(makePrGitLive(pullRequest))
+        Effect.provide(makePrGitLive(session))
       );
     }
 

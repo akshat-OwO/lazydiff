@@ -1,48 +1,77 @@
-import { deepStrictEqual, strictEqual } from "node:assert";
+import { strictEqual } from "node:assert";
 import { test } from "node:test";
 
 import { Effect, Stream } from "effect";
 
 import { Git } from "../../src/services/git.ts";
 import { makePrGitLive } from "../../src/services/pr-git.ts";
-import type { PullRequestReview } from "../../src/services/vcs.ts";
+import type { PullRequestSession } from "../../src/services/vcs.ts";
 
-const multiFilePatch = Array.from({ length: 45 }, (_, index) => {
+const filePatch = (index: number) => {
   const name = `file-${index}.ts`;
   return `diff --git a/${name} b/${name}\n--- a/${name}\n+++ b/${name}\n@@ -1 +1 @@\n-a\n+b\n`;
-}).join("");
+};
 
-const pullRequest: PullRequestReview = {
-  baseRefName: "main",
-  entries: Array.from({ length: 45 }, (_, index) => ({
-    path: `file-${index}.ts`,
+const batchOf = (start: number, count: number) => ({
+  entries: Array.from({ length: count }, (_, offset) => ({
+    path: `file-${start + offset}.ts`,
     status: "modified" as const,
   })),
+  patch: Array.from({ length: count }, (_, offset) =>
+    filePatch(start + offset)
+  ).join(""),
+});
+
+const session: PullRequestSession = {
+  baseRefName: "main",
+  fileBatches: Stream.fromIterable([
+    batchOf(0, 20),
+    batchOf(20, 20),
+    batchOf(40, 5),
+  ]),
   headRefName: "feature/pr-review",
   number: 3,
   owner: "akshat-OwO",
-  patch: multiFilePatch,
   repo: "contingency",
   title: "Example pull request",
   url: "https://github.com/akshat-OwO/contingency/pull/3",
 };
 
-test("PR-backed Git service streams committed diffs in batches of 20", async () => {
+test("PR-backed Git service streams committed diffs progressively", async () => {
   const batches = await Effect.gen(function* () {
     const git = yield* Git;
-    return yield* Stream.runCollect(git.scopeDiffBatches("committed"));
-  }).pipe(Effect.provide(makePrGitLive(pullRequest)), Effect.runPromise);
+    return yield* Stream.runCollect(git.diffBatches("committed"));
+  }).pipe(
+    Effect.provide(makePrGitLive(session)),
+    Effect.scoped,
+    Effect.runPromise
+  );
 
-  strictEqual(batches.length, 3);
-  strictEqual(batches[0]?.reset, true);
-  strictEqual(batches[0]?.complete, false);
-  strictEqual(batches[1]?.reset, false);
-  strictEqual(batches[2]?.complete, true);
+  strictEqual(batches.at(0)?.reset, true);
+  strictEqual(batches.at(-1)?.complete, true);
+
   let joined = "";
 
   for (const batch of batches) {
     joined = batch.reset ? batch.patch : joined + batch.patch;
   }
 
-  deepStrictEqual(joined, multiFilePatch);
+  const expected = Array.from({ length: 45 }, (_, index) =>
+    filePatch(index)
+  ).join("");
+
+  strictEqual(joined, expected);
+});
+
+test("PR-backed Git service streams growing status snapshots", async () => {
+  const snapshots = await Effect.gen(function* () {
+    const git = yield* Git;
+    return yield* Stream.runCollect(git.statusChanges("committed"));
+  }).pipe(
+    Effect.provide(makePrGitLive(session)),
+    Effect.scoped,
+    Effect.runPromise
+  );
+
+  strictEqual(snapshots.at(-1)?.length, 45);
 });

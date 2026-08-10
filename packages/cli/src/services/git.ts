@@ -896,19 +896,31 @@ const make = (workingDirectory?: string) =>
 
     const reviewSource = "working-tree" as GitReviewSource;
 
+    /** Restarts batching whenever the working tree changes. */
+    const diffBatches = (scope: GitChangeScope, branch?: string) =>
+      Stream.merge(Stream.make("initial" as const), repositoryChanges).pipe(
+        Stream.switchMap(() => scopeDiffBatches(scope, branch))
+      );
+
+    const statusChanges = (scope: GitChangeScope, branch?: string) =>
+      Stream.merge(Stream.make("initial" as const), repositoryChanges).pipe(
+        Stream.mapEffect(() => fileStatuses(scope, branch))
+      );
+
     return {
       branchChanges: SubscriptionRef.changes(branchState),
       changedFiles,
       createBranch,
       currentBranch,
       deleteBranch,
+      diffBatches,
       fileStatuses,
       listBranches,
       repositoryChanges,
       repositoryName,
       reviewSource,
       scopeDiff,
-      scopeDiffBatches,
+      statusChanges,
       switchBranch,
     };
   });

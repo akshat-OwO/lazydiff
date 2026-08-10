@@ -1,5 +1,6 @@
 import { LazyDiffRpcs } from "@lazydiff/protocol";
 import type { GitChangeScope } from "@lazydiff/protocol";
+import type { FileDiffMetadata } from "@pierre/diffs";
 import { Duration, Effect, Layer, Result, Schedule, Stream } from "effect";
 import { Atom, AtomRpc } from "effect/unstable/reactivity";
 import {
@@ -14,6 +15,7 @@ import {
   gitChangeScopePreferenceOrder,
   resolvePreferredGitChangeScope,
 } from "@/lib/git-change-scope";
+import { parsePatchFileDiffs } from "@/lib/parse-patch-file-diffs";
 
 const webSocketUrl = Effect.sync(() => {
   const url = new URL("/ws", globalThis.location.href);
@@ -148,15 +150,16 @@ export const gitChangeScopeAutoSelectAtom = LazyDiffRpcClient.runtime.atom(
     })
 );
 
-const joinPatchFragments = (patches: readonly string[]) =>
-  patches
-    .filter((patch) => patch.length > 0)
-    .map((patch) => (patch.endsWith("\n") ? patch : `${patch}\n`))
-    .join("");
+export interface GitDiffState {
+  readonly complete: boolean;
+  readonly fileDiffs: readonly FileDiffMetadata[];
+  /** Increments per resync so consumers can reset view state. */
+  readonly generation: number;
+}
 
 /**
- * Accumulates streamed diff batches into a cumulative patch. Atom stream atoms
- * only retain the latest emission, so mapAccum keeps that latest value complete.
+ * Parses each streamed batch once and accumulates the result. Atom stream atoms
+ * only keep the latest emission, so the accumulated list travels with it.
  */
 export const gitDiffAtom = LazyDiffRpcClient.runtime.atom((get) =>
   Stream.unwrap(
@@ -167,25 +170,24 @@ export const gitDiffAtom = LazyDiffRpcClient.runtime.atom((get) =>
         type: "git.diff.subscribe",
       }).pipe(
         Stream.mapAccum(
-          () => ({ patch: "" }),
+          (): GitDiffState => ({
+            complete: false,
+            fileDiffs: [],
+            generation: 0,
+          }),
           (state, message) => {
-            const patch = message.data.reset
-              ? message.data.patch
-              : joinPatchFragments([state.patch, message.data.patch]);
+            const parsed = parsePatchFileDiffs(message.data.patch);
+            const next: GitDiffState = {
+              complete: message.data.complete,
+              fileDiffs: message.data.reset
+                ? parsed
+                : [...state.fileDiffs, ...parsed],
+              generation: message.data.reset
+                ? state.generation + 1
+                : state.generation,
+            };
 
-            return [
-              { patch },
-              [
-                {
-                  data: {
-                    complete: message.data.complete,
-                    patch,
-                    reset: message.data.reset,
-                  },
-                  type: "git.diff.result" as const,
-                },
-              ],
-            ] as const;
+            return [next, [next]] as const;
           }
         )
       );

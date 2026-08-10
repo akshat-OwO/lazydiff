@@ -50,13 +50,11 @@ import {
   describeChangeWithoutHunks,
   describeModeChange,
 } from "@/lib/file-diff-summary";
-import { parsePatchFileDiffs } from "@/lib/parse-patch-file-diffs";
 import { preloadFileDiffHighlighter } from "@/lib/preload-file-diff-highlighter";
 import { gitChangeScopeAtom, gitDiffAtom } from "@/lib/rpc";
 import { cn } from "@/lib/utils";
 
-/** Above this many files, start collapsed so the pane stays interactive. */
-const autoCollapseFileCount = 40;
+const emptyFileDiffs: readonly FileDiffMetadata[] = [];
 
 type AnnotationMetadata =
   | {
@@ -83,19 +81,50 @@ const gutterUtilityCSS = `
 }
 `;
 
-const toCodeViewItem = (
+interface CachedCodeViewItem {
+  readonly annotations: DiffLineAnnotation<AnnotationMetadata>[] | undefined;
+  readonly collapsed: boolean;
+  readonly item: CodeViewDiffItem<AnnotationMetadata>;
+  readonly version: number;
+}
+
+/**
+ * Keyed by the parsed file diff, which is created once per sync, so item
+ * identity survives re-renders while later batches stream in. CodeView compares
+ * items by reference to take its append-only update path.
+ */
+const codeViewItems = new WeakMap<FileDiffMetadata, CachedCodeViewItem>();
+
+const resolveCodeViewItem = (
   fileDiff: FileDiffMetadata,
   collapsed: boolean,
   annotations: DiffLineAnnotation<AnnotationMetadata>[] | undefined,
   version: number
-): CodeViewDiffItem<AnnotationMetadata> => ({
-  collapsed,
-  fileDiff,
-  id: fileDiffAnchorId(fileDiff.name),
-  type: "diff",
-  version,
-  ...(annotations === undefined ? {} : { annotations }),
-});
+): CodeViewDiffItem<AnnotationMetadata> => {
+  const cached = codeViewItems.get(fileDiff);
+
+  if (
+    cached !== undefined &&
+    cached.collapsed === collapsed &&
+    cached.annotations === annotations &&
+    cached.version === version
+  ) {
+    return cached.item;
+  }
+
+  const item: CodeViewDiffItem<AnnotationMetadata> = {
+    collapsed,
+    fileDiff,
+    id: fileDiffAnchorId(fileDiff.name),
+    type: "diff",
+    version,
+    ...(annotations === undefined ? {} : { annotations }),
+  };
+
+  codeViewItems.set(fileDiff, { annotations, collapsed, item, version });
+
+  return item;
+};
 
 function ChangedFilesDiffs() {
   const gitDiff = useAtomValue(gitDiffAtom);
@@ -113,32 +142,26 @@ function ChangedFilesDiffs() {
   const [collapsedPaths, setCollapsedPaths] = useState<ReadonlySet<string>>(
     () => new Set()
   );
-  const [collapseSource, setCollapseSource] = useState<readonly string[]>([]);
+  const [collapseSource, setCollapseSource] = useState(0);
   const [itemVersions, setItemVersions] = useState<ReadonlyMap<string, number>>(
     () => new Map()
   );
-  const [highlighterReadyFor, setHighlighterReadyFor] = useState<
-    readonly FileDiffMetadata[] | null
+  const [highlighterReadyGeneration, setHighlighterReadyGeneration] = useState<
+    number | null
   >(null);
-  const [highlighterFailedFor, setHighlighterFailedFor] = useState<
-    readonly FileDiffMetadata[] | null
-  >(null);
+  const [highlighterFailedGeneration, setHighlighterFailedGeneration] =
+    useState<number | null>(null);
   const [preloadAttempt, setPreloadAttempt] = useState(0);
 
-  const patch = gitDiff._tag === "Success" ? gitDiff.value.data.patch : "";
-  const complete =
-    gitDiff._tag === "Success" ? gitDiff.value.data.complete : true;
-  const fileDiffs = useMemo(() => parsePatchFileDiffs(patch), [patch]);
-  const filePaths = useMemo(
-    () => fileDiffs.map((fileDiff) => fileDiff.name),
-    [fileDiffs]
-  );
+  const fileDiffs =
+    gitDiff._tag === "Success" ? gitDiff.value.fileDiffs : emptyFileDiffs;
+  const complete = gitDiff._tag === "Success" ? gitDiff.value.complete : true;
+  const generation = gitDiff._tag === "Success" ? gitDiff.value.generation : 0;
 
-  if (filePaths !== collapseSource) {
-    setCollapseSource(filePaths);
-    setCollapsedPaths(
-      fileDiffs.length >= autoCollapseFileCount ? new Set(filePaths) : new Set()
-    );
+  // A new generation is a fresh sync, so per-file view state starts over.
+  if (generation !== collapseSource) {
+    setCollapseSource(generation);
+    setCollapsedPaths(new Set());
     setItemVersions(new Map());
   }
 
@@ -169,71 +192,88 @@ function ChangedFilesDiffs() {
     return map;
   }, [scopedAnnotations]);
 
-  const annotationsForFile = useCallback(
-    (fileDiff: FileDiffMetadata) => {
-      const attached = scopedAnnotations.filter((annotation) =>
-        annotationMatchesFileDiff(annotation, fileDiff)
-      );
-      const next: DiffLineAnnotation<AnnotationMetadata>[] = attached.map(
-        (annotation) => {
-          const anchor = annotationAnchorForRange(annotation.range);
+  /**
+   * Only annotated files land in this map, so the per-file lookup below stays a
+   * reference comparison for the thousands of files that carry no annotations.
+   */
+  const annotationsByFile = useMemo(() => {
+    const map = new Map<
+      FileDiffMetadata,
+      DiffLineAnnotation<AnnotationMetadata>[]
+    >();
 
-          return {
-            lineNumber: anchor.lineNumber,
-            metadata: {
-              annotationId: annotation.id,
-              kind: "saved" as const,
-            },
-            side: anchor.side,
-          };
-        }
-      );
-      const draftForFile =
-        draft !== null &&
-        draft.scope === scope &&
-        draft.filePath === fileDiff.name &&
-        draftMatchesFileDiff(draft, fileDiff)
-          ? draft
-          : null;
+    const append = (
+      fileDiff: FileDiffMetadata,
+      annotation: DiffLineAnnotation<AnnotationMetadata>
+    ) => {
+      const existing = map.get(fileDiff);
 
-      if (draftForFile !== null) {
-        next.push({
-          lineNumber: draftForFile.lineNumber,
-          metadata: { kind: "draft" },
-          side: draftForFile.side,
-        });
+      if (existing === undefined) {
+        map.set(fileDiff, [annotation]);
+        return;
       }
 
-      return next.length === 0 ? undefined : next;
-    },
-    [draft, scope, scopedAnnotations]
-  );
+      existing.push(annotation);
+    };
+
+    if (scopedAnnotations.length > 0 || draft !== null) {
+      for (const fileDiff of fileDiffs) {
+        for (const annotation of scopedAnnotations) {
+          if (!annotationMatchesFileDiff(annotation, fileDiff)) {
+            continue;
+          }
+
+          const anchor = annotationAnchorForRange(annotation.range);
+          append(fileDiff, {
+            lineNumber: anchor.lineNumber,
+            metadata: { annotationId: annotation.id, kind: "saved" },
+            side: anchor.side,
+          });
+        }
+
+        if (
+          draft !== null &&
+          draft.scope === scope &&
+          draft.filePath === fileDiff.name &&
+          draftMatchesFileDiff(draft, fileDiff)
+        ) {
+          append(fileDiff, {
+            lineNumber: draft.lineNumber,
+            metadata: { kind: "draft" },
+            side: draft.side,
+          });
+        }
+      }
+    }
+
+    return map;
+  }, [draft, fileDiffs, scope, scopedAnnotations]);
 
   const items = useMemo(
     () =>
-      fileDiffs.map((fileDiff) => {
-        const id = fileDiffAnchorId(fileDiff.name);
-
-        return toCodeViewItem(
+      fileDiffs.map((fileDiff) =>
+        resolveCodeViewItem(
           fileDiff,
           annotationFocus?.filePath === fileDiff.name
             ? false
             : collapsedPaths.has(fileDiff.name),
-          annotationsForFile(fileDiff),
-          itemVersions.get(id) ?? 0
-        );
-      }),
+          annotationsByFile.get(fileDiff),
+          itemVersions.get(fileDiffAnchorId(fileDiff.name)) ?? 0
+        )
+      ),
     [
       annotationFocus?.filePath,
-      annotationsForFile,
+      annotationsByFile,
       collapsedPaths,
       fileDiffs,
       itemVersions,
     ]
   );
 
-  const isHighlighterReady = highlighterReadyFor === fileDiffs;
-  const isHighlighterFailed = highlighterFailedFor === fileDiffs;
+  // Readiness is tracked per sync, not per batch, so later batches never take
+  // the pane back to a loading state while files are still streaming in.
+  const isHighlighterReady = highlighterReadyGeneration === generation;
+  const isHighlighterFailed = highlighterFailedGeneration === generation;
 
   useEffect(() => {
     if (fileDiffs.length === 0) {
@@ -246,13 +286,12 @@ function ChangedFilesDiffs() {
       try {
         await preloadFileDiffHighlighter(fileDiffs);
         if (!cancelled) {
-          setHighlighterReadyFor(fileDiffs);
-          setHighlighterFailedFor(null);
+          setHighlighterReadyGeneration(generation);
+          setHighlighterFailedGeneration(null);
         }
       } catch {
         if (!cancelled) {
-          setHighlighterReadyFor(null);
-          setHighlighterFailedFor(fileDiffs);
+          setHighlighterFailedGeneration(generation);
         }
       }
     })();
@@ -260,7 +299,7 @@ function ChangedFilesDiffs() {
     return () => {
       cancelled = true;
     };
-  }, [fileDiffs, preloadAttempt]);
+  }, [fileDiffs, generation, preloadAttempt]);
 
   useEffect(() => {
     if (selectedPath === null) {
@@ -547,7 +586,7 @@ function ChangedFilesDiffs() {
         </div>
       )}
       <CodeView
-        className="h-full"
+        className="h-full overflow-auto"
         items={items}
         options={codeViewOptions}
         ref={codeViewRef}
