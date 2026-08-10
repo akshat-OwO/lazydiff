@@ -1,4 +1,6 @@
 import { useAtom, useAtomValue } from "@effect/atom-react";
+import type { GithubPrReviewThread } from "@lazydiff/protocol";
+import { githubSideToPierre } from "@lazydiff/protocol";
 import type {
   DiffLineAnnotation,
   FileDiffMetadata,
@@ -11,6 +13,7 @@ import type { ReactNode } from "react";
 
 import { AnnotationDraftForm } from "@/components/annotation-draft-form";
 import { InlineAnnotationComment } from "@/components/inline-annotation-comment";
+import { RemoteReviewThread } from "@/components/remote-review-thread";
 import { useTheme } from "@/components/theme-provider";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -31,7 +34,7 @@ import {
   describeChangeWithoutHunks,
   describeModeChange,
 } from "@/lib/file-diff-summary";
-import { gitChangeScopeAtom } from "@/lib/rpc";
+import { gitChangeScopeAtom, githubPrReviewThreadsAtom } from "@/lib/rpc";
 import { cn } from "@/lib/utils";
 
 type AnnotationMetadata =
@@ -41,6 +44,10 @@ type AnnotationMetadata =
     }
   | {
       readonly kind: "draft";
+    }
+  | {
+      readonly kind: "remote";
+      readonly threadId: string;
     };
 
 const gutterUtilityCSS = `
@@ -139,6 +146,7 @@ function FileDiffCard({
   const scope = useAtomValue(gitChangeScopeAtom);
   const [draft, setDraft] = useAtom(annotationDraftAtom);
   const annotations = useAtomValue(annotationsAtom);
+  const reviewThreads = useAtomValue(githubPrReviewThreadsAtom);
   const [selectionResetKey, setSelectionResetKey] = useState(0);
   const scopedAnnotations = useMemo(
     () => annotationsForScope(annotations, scope),
@@ -158,6 +166,27 @@ function FileDiffCard({
       ),
     [fileDiff, scopedAnnotations]
   );
+  const remoteThreadsForFile = useMemo(() => {
+    if (reviewThreads._tag !== "Success") {
+      return [] as readonly GithubPrReviewThread[];
+    }
+
+    return reviewThreads.value.data.threads.filter(
+      (thread) =>
+        thread.path === fileDiff.name &&
+        thread.line !== null &&
+        !thread.isOutdated
+    );
+  }, [fileDiff.name, reviewThreads]);
+  const remoteThreadsById = useMemo(() => {
+    const map = new Map<string, GithubPrReviewThread>();
+
+    for (const thread of remoteThreadsForFile) {
+      map.set(thread.id, thread);
+    }
+
+    return map;
+  }, [remoteThreadsForFile]);
   const annotationsById = useMemo(() => {
     const map = new Map<
       string,
@@ -230,6 +259,21 @@ function FileDiffCard({
       }
     );
 
+    for (const thread of remoteThreadsForFile) {
+      if (thread.line === null) {
+        continue;
+      }
+
+      next.push({
+        lineNumber: thread.line,
+        metadata: {
+          kind: "remote",
+          threadId: thread.id,
+        },
+        side: githubSideToPierre(thread.side),
+      });
+    }
+
     if (draftForFile !== null) {
       next.push({
         lineNumber: draftForFile.lineNumber,
@@ -239,13 +283,20 @@ function FileDiffCard({
     }
 
     return next.length === 0 ? undefined : next;
-  }, [attachedForFile, draftForFile]);
+  }, [attachedForFile, draftForFile, remoteThreadsForFile]);
 
   const renderAnnotation = useCallback(
     (annotation: DiffLineAnnotation<AnnotationMetadata>) => {
       if (annotation.metadata.kind === "draft") {
         return draftForFile === null ? null : (
           <AnnotationDraftForm draft={draftForFile} />
+        );
+      }
+
+      if (annotation.metadata.kind === "remote") {
+        const thread = remoteThreadsById.get(annotation.metadata.threadId);
+        return thread === undefined ? null : (
+          <RemoteReviewThread thread={thread} />
         );
       }
 
@@ -263,7 +314,7 @@ function FileDiffCard({
         />
       );
     },
-    [annotationsById, draftForFile]
+    [annotationsById, draftForFile, remoteThreadsById]
   );
 
   return (

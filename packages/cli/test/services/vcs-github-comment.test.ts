@@ -1,4 +1,4 @@
-import { match, strictEqual } from "node:assert";
+import { match, ok, strictEqual } from "node:assert";
 import { test } from "node:test";
 
 import { NodeServices } from "@effect/platform-node";
@@ -24,7 +24,17 @@ const makeRecordingHttpClient = (
     Effect.succeed(HttpClientResponse.fromWeb(request, handler(request)))
   );
 
-test("createPullRequestIssueComment posts markdown to the issues comments API", async () => {
+const decodeRequestBody = (
+  request: HttpClientRequest.HttpClientRequest | undefined
+) => {
+  if (request?.body._tag !== "Uint8Array") {
+    return;
+  }
+
+  return JSON.parse(new TextDecoder().decode(request.body.body)) as unknown;
+};
+
+test("createPullRequestReview posts inline line comments", async () => {
   const previous = process.env.GITHUB_TOKEN;
   process.env.GITHUB_TOKEN = "test-token";
 
@@ -37,19 +47,27 @@ test("createPullRequestIssueComment posts markdown to the issues comments API", 
       return Response.json(
         {
           html_url:
-            "https://github.com/akshat-OwO/contingency/pull/3#issuecomment-1",
+            "https://github.com/akshat-OwO/contingency/pull/3#pullrequestreview-1",
         },
-        { status: 201 }
+        { status: 200 }
       );
     })
   );
 
   try {
-    const comment = await Effect.gen(function* () {
+    const review = await Effect.gen(function* () {
       const vcs = yield* VCSService;
-      return yield* vcs.createPullRequestIssueComment(
+      return yield* vcs.createPullRequestReview(
         pullRequestRef,
-        "### Annotation 1\n\nLooks good."
+        "0123456789abcdef0123456789abcdef01234567",
+        [
+          {
+            body: "Looks good.",
+            line: 9,
+            path: "apps/web/src/components/navbar.tsx",
+            side: "LEFT",
+          },
+        ]
       );
     }).pipe(
       Effect.provide(
@@ -62,23 +80,33 @@ test("createPullRequestIssueComment posts markdown to the issues comments API", 
     );
 
     strictEqual(
-      comment.htmlUrl,
-      "https://github.com/akshat-OwO/contingency/pull/3#issuecomment-1"
+      review.htmlUrl,
+      "https://github.com/akshat-OwO/contingency/pull/3#pullrequestreview-1"
     );
     strictEqual(captured?.method, "POST");
     strictEqual(
       captured?.url,
-      "https://api.github.com/repos/akshat-OwO/contingency/issues/3/comments"
+      "https://api.github.com/repos/akshat-OwO/contingency/pulls/3/reviews"
     );
 
-    const bodyText =
-      captured?.body._tag === "Uint8Array"
-        ? new TextDecoder().decode(captured.body.body)
-        : undefined;
-    strictEqual(
-      bodyText,
-      JSON.stringify({ body: "### Annotation 1\n\nLooks good." })
-    );
+    const body = decodeRequestBody(captured);
+    ok(body !== undefined && typeof body === "object");
+    const record = body as {
+      comments: readonly {
+        body: string;
+        line: number;
+        path: string;
+        side: string;
+      }[];
+      commit_id: string;
+      event: string;
+    };
+    strictEqual(record.event, "COMMENT");
+    strictEqual(record.commit_id, "0123456789abcdef0123456789abcdef01234567");
+    strictEqual(record.comments.length, 1);
+    strictEqual(record.comments[0]?.side, "LEFT");
+    strictEqual(record.comments[0]?.line, 9);
+    strictEqual(record.comments[0]?.body, "Looks good.");
   } finally {
     if (previous === undefined) {
       delete process.env.GITHUB_TOKEN;
@@ -88,7 +116,7 @@ test("createPullRequestIssueComment posts markdown to the issues comments API", 
   }
 });
 
-test("createPullRequestIssueComment requires authentication", async () => {
+test("createPullRequestReview requires authentication", async () => {
   const previousToken = process.env.GITHUB_TOKEN;
   const previousGhConfig = process.env.GH_CONFIG_DIR;
   delete process.env.GITHUB_TOKEN;
@@ -103,7 +131,14 @@ test("createPullRequestIssueComment requires authentication", async () => {
     const error = await Effect.gen(function* () {
       const vcs = yield* VCSService;
       return yield* vcs
-        .createPullRequestIssueComment(pullRequestRef, "comment")
+        .createPullRequestReview(pullRequestRef, "abc", [
+          {
+            body: "comment",
+            line: 1,
+            path: "a.ts",
+            side: "RIGHT",
+          },
+        ])
         .pipe(Effect.flip);
     }).pipe(
       Effect.provide(

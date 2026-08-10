@@ -6,11 +6,17 @@ import {
 } from "@effect/atom-react";
 import type { GitChangeScope } from "@lazydiff/protocol";
 import { Link } from "@tanstack/react-router";
-import { GitBranchIcon, MessageSquareTextIcon } from "lucide-react";
+import {
+  CirclePlayIcon,
+  GitBranchIcon,
+  MessageSquareTextIcon,
+  SquareIcon,
+} from "lucide-react";
 import { useEffect } from "react";
 
 import { GitBranchPicker } from "@/components/git-branch-picker";
 import { ModeToggle } from "@/components/mode-toggle";
+import { PrReviewSessionSync } from "@/components/pr-review-session-sync";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -28,6 +34,11 @@ import {
   annotationsSidebarOpenAtom,
 } from "@/lib/annotations";
 import { formatLazydiffTitle } from "@/lib/app-title";
+import {
+  clearPrReviewSession,
+  prReviewSessionActiveAtom,
+  writePrReviewSession,
+} from "@/lib/pr-review-session";
 import {
   gitBranchChangesAtom,
   gitChangeScopeAtom,
@@ -161,6 +172,60 @@ function AnnotationsToggle() {
   );
 }
 
+function PrReviewSessionToggle() {
+  const repository = useAtomValue(gitRepositoryAtom);
+  const annotations = useAtomValue(annotationsAtom);
+  const setAnnotations = useAtomSet(annotationsAtom);
+  const [sessionActive, setSessionActive] = useAtom(prReviewSessionActiveAtom);
+
+  if (
+    repository._tag !== "Success" ||
+    repository.value.data.source !== "pull-request" ||
+    repository.value.data.pullRequest === undefined
+  ) {
+    return null;
+  }
+
+  const { pullRequest } = repository.value.data;
+
+  if (sessionActive) {
+    return (
+      <Button
+        aria-label="End review"
+        onClick={() => {
+          clearPrReviewSession(pullRequest);
+          setSessionActive(false);
+          setAnnotations([]);
+        }}
+        size="xs"
+        title="Stop persisting annotations for this pull request"
+        type="button"
+        variant="secondary"
+      >
+        <SquareIcon data-icon="inline-start" />
+        End review
+      </Button>
+    );
+  }
+
+  return (
+    <Button
+      aria-label="Start review"
+      onClick={() => {
+        writePrReviewSession(pullRequest, annotations);
+        setSessionActive(true);
+      }}
+      size="xs"
+      title="Persist annotations locally across reloads for this pull request"
+      type="button"
+      variant="outline"
+    >
+      <CirclePlayIcon data-icon="inline-start" />
+      Start review
+    </Button>
+  );
+}
+
 function BrandTitle() {
   const repository = useAtomValue(gitRepositoryAtom);
   const repositoryName =
@@ -198,6 +263,7 @@ function Navbar() {
   return (
     <header className="bg-sidebar text-sidebar-foreground border-sidebar-border sticky top-0 z-40 border-b">
       <GitChangeScopeAutoSelect />
+      <PrReviewSessionSync />
       <nav
         aria-label="Primary navigation"
         className="flex h-14 w-full items-center justify-between px-4 sm:px-6"
@@ -209,6 +275,7 @@ function Navbar() {
         <div className="flex items-center gap-2">
           <GitBranchButton />
           <GitChangeScopeSelect />
+          <PrReviewSessionToggle />
           <AnnotationsToggle />
           <ModeToggle />
         </div>

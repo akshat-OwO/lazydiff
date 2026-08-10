@@ -2,4 +2,4 @@
 "lazydiff": minor
 ---
 
-While reviewing a pull request with `--pr`, annotations can be sent to the remote PR as a comment from a new **Send to remote** button in the annotations sidebar. Annotations stay local until that button is used.
+While reviewing a pull request with `--pr`, local annotations can be sent as inline GitHub review comments (highlighted on the diff). Existing PR review threads render on matching lines with reply and resolve. **Start review** persists annotations in the browser so a reload does not lose in-progress notes.

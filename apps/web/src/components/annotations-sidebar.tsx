@@ -1,4 +1,10 @@
-import { useAtom, useAtomSet, useAtomValue } from "@effect/atom-react";
+import {
+  useAtom,
+  useAtomRefresh,
+  useAtomSet,
+  useAtomValue,
+} from "@effect/atom-react";
+import { annotationRangeToGithubReviewComment } from "@lazydiff/protocol";
 import {
   ClipboardCopyIcon,
   LinkIcon,
@@ -26,6 +32,7 @@ import { copyTextToClipboard } from "@/lib/clipboard";
 import {
   gitChangeScopeAtom,
   githubPrAnnotationsPostMutation,
+  githubPrReviewThreadsAtom,
   gitRepositoryAtom,
 } from "@/lib/rpc";
 import { cn } from "@/lib/utils";
@@ -123,6 +130,7 @@ function AnnotationsSidebar() {
   const sendAnnotations = useAtomSet(githubPrAnnotationsPostMutation, {
     mode: "promise",
   });
+  const refreshThreads = useAtomRefresh(githubPrReviewThreadsAtom);
   const annotations = annotationsForScope(allAnnotations, scope);
   const [open, setOpen] = useAtom(annotationsSidebarOpenAtom);
   const [copyState, setCopyState] = useState<CopyState>("idle");
@@ -161,7 +169,15 @@ function AnnotationsSidebar() {
       return;
     }
 
-    const body = formatAnnotationsMarkdown(annotations);
+    const comments = annotations.map((annotation) =>
+      annotationRangeToGithubReviewComment({
+        body: annotation.comment,
+        filePath: annotation.filePath,
+        range: annotation.range,
+      })
+    );
+    const sentIds = new Set(annotations.map((annotation) => annotation.id));
+
     setSendError(undefined);
     setSendState("sending");
 
@@ -169,10 +185,14 @@ function AnnotationsSidebar() {
       try {
         await sendAnnotations({
           payload: {
-            data: { body },
+            data: { comments },
             type: "github.pr.annotations.post",
           },
         });
+        setAnnotations((current) =>
+          current.filter((annotation) => !sentIds.has(annotation.id))
+        );
+        refreshThreads();
         setSendState("sent");
       } catch (error) {
         setSendState("failed");

@@ -17,6 +17,7 @@ import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 import { Git } from "@/services/git";
 import { PullRequestSession } from "@/services/pull-request-session";
 import { VCSService } from "@/services/vcs";
+import type { PullRequestRef, PullRequestReview } from "@/services/vcs";
 
 const toGitChangedFilesError = (error: Error) =>
   new GitChangedFilesError({
@@ -40,8 +41,29 @@ const toGitStatusError = (error: Error) =>
 
 const toGithubPrAnnotationsError = (error: Error) =>
   new GithubPrAnnotationsError({
-    message: error.message || "Unable to send annotations to the pull request",
+    message: error.message || "Unable to update pull request review comments",
   });
+
+const requirePullRequestReview = (
+  review: Option.Option<PullRequestReview>
+): Effect.Effect<PullRequestReview, GithubPrAnnotationsError> =>
+  Option.match(review, {
+    onNone: () =>
+      Effect.fail(
+        new GithubPrAnnotationsError({
+          message:
+            "Pull request review comments are only available while reviewing a pull request with --pr.",
+        })
+      ),
+    onSome: Effect.succeed,
+  });
+
+const pullRequestRefOf = (review: PullRequestReview): PullRequestRef => ({
+  host: "github.com",
+  number: review.number,
+  owner: review.owner,
+  repo: review.repo,
+});
 
 const GitRpcHandlersLive = LazyDiffRpcs.toLayer(
   Effect.gen(function* () {
@@ -109,12 +131,30 @@ const GitRpcHandlersLive = LazyDiffRpcs.toLayer(
           Stream.mapError(toGitDiffError)
         ),
       "git.repository.get": () =>
-        Effect.succeed({
-          data: {
-            name: git.repositoryName,
-            source: git.reviewSource,
-          },
-          type: "git.repository.result" as const,
+        Option.match(pullRequestSession.review, {
+          onNone: () =>
+            Effect.succeed({
+              data: {
+                name: git.repositoryName,
+                source: git.reviewSource,
+              },
+              type: "git.repository.result" as const,
+            }),
+          onSome: (review) =>
+            Effect.succeed({
+              data: {
+                name: git.repositoryName,
+                pullRequest: {
+                  headSha: review.headSha,
+                  number: review.number,
+                  owner: review.owner,
+                  repo: review.repo,
+                  url: review.url,
+                },
+                source: git.reviewSource,
+              },
+              type: "git.repository.result" as const,
+            }),
         }),
       "git.status.get": ({ data }) =>
         git.fileStatuses(data.scope, data.branch).pipe(
@@ -138,32 +178,75 @@ const GitRpcHandlersLive = LazyDiffRpcs.toLayer(
         ),
       "github.pr.annotations.post": ({ data }) =>
         Effect.gen(function* () {
-          const review = yield* Option.match(pullRequestSession.review, {
-            onNone: () =>
-              Effect.fail(
-                new GithubPrAnnotationsError({
-                  message:
-                    "Sending annotations is only available while reviewing a pull request with --pr.",
-                })
-              ),
-            onSome: Effect.succeed,
-          });
+          const review = yield* requirePullRequestReview(
+            pullRequestSession.review
+          );
+          const submission = yield* vcs
+            .createPullRequestReview(
+              pullRequestRefOf(review),
+              review.headSha,
+              data.comments
+            )
+            .pipe(Effect.mapError(toGithubPrAnnotationsError));
 
+          return {
+            data: { htmlUrl: submission.htmlUrl },
+            type: "github.pr.annotations.posted" as const,
+          };
+        }),
+      "github.pr.review-comments.reply": ({ data }) =>
+        Effect.gen(function* () {
+          const review = yield* requirePullRequestReview(
+            pullRequestSession.review
+          );
           const comment = yield* vcs
-            .createPullRequestIssueComment(
-              {
-                host: "github.com",
-                number: review.number,
-                owner: review.owner,
-                repo: review.repo,
-              },
+            .replyToPullRequestReviewComment(
+              pullRequestRefOf(review),
+              data.commentId,
               data.body
             )
             .pipe(Effect.mapError(toGithubPrAnnotationsError));
 
           return {
-            data: { htmlUrl: comment.htmlUrl },
-            type: "github.pr.annotations.posted" as const,
+            data: { comment },
+            type: "github.pr.review-comments.replied" as const,
+          };
+        }),
+      "github.pr.review-threads.list": () =>
+        Option.match(pullRequestSession.review, {
+          onNone: () =>
+            Effect.succeed({
+              data: { threads: [] },
+              type: "github.pr.review-threads.result" as const,
+            }),
+          onSome: (review) =>
+            vcs.listPullRequestReviewThreads(pullRequestRefOf(review)).pipe(
+              Effect.map((threads) => ({
+                data: { threads },
+                type: "github.pr.review-threads.result" as const,
+              })),
+              Effect.mapError(toGithubPrAnnotationsError)
+            ),
+        }),
+      "github.pr.review-threads.resolve": ({ data }) =>
+        Effect.gen(function* () {
+          const review = yield* requirePullRequestReview(
+            pullRequestSession.review
+          );
+          const result = yield* vcs
+            .setPullRequestReviewThreadResolved(
+              pullRequestRefOf(review),
+              data.threadId,
+              data.resolved
+            )
+            .pipe(Effect.mapError(toGithubPrAnnotationsError));
+
+          return {
+            data: {
+              isResolved: result.isResolved,
+              threadId: data.threadId,
+            },
+            type: "github.pr.review-threads.resolved" as const,
           };
         }),
     };
