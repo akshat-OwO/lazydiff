@@ -25,7 +25,15 @@ export interface PullRequestReview {
   readonly url: string;
 }
 
+export interface PullRequestIssueComment {
+  readonly htmlUrl: string;
+}
+
 export interface VCSServiceShape {
+  readonly createPullRequestIssueComment: (
+    ref: PullRequestRef,
+    body: string
+  ) => Effect.Effect<PullRequestIssueComment, VcsError>;
   readonly fetchPullRequest: (
     url: string
   ) => Effect.Effect<PullRequestReview, VcsError>;

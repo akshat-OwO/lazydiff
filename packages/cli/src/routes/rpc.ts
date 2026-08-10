@@ -3,9 +3,10 @@ import {
   GitChangedFilesError,
   GitDiffError,
   GitStatusError,
+  GithubPrAnnotationsError,
   LazyDiffRpcs,
 } from "@lazydiff/protocol";
-import { Effect, Layer, Stream } from "effect";
+import { Effect, Layer, Option, Stream } from "effect";
 import {
   HttpRouter,
   HttpServerRequest,
@@ -14,6 +15,8 @@ import {
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 import { Git } from "@/services/git";
+import { PullRequestSession } from "@/services/pull-request-session";
+import { VCSService } from "@/services/vcs";
 
 const toGitChangedFilesError = (error: Error) =>
   new GitChangedFilesError({
@@ -35,9 +38,16 @@ const toGitStatusError = (error: Error) =>
     message: error.message || "Unable to read Git status",
   });
 
+const toGithubPrAnnotationsError = (error: Error) =>
+  new GithubPrAnnotationsError({
+    message: error.message || "Unable to send annotations to the pull request",
+  });
+
 const GitRpcHandlersLive = LazyDiffRpcs.toLayer(
   Effect.gen(function* () {
     const git = yield* Git;
+    const pullRequestSession = yield* PullRequestSession;
+    const vcs = yield* VCSService;
 
     return {
       "git.branch.create": ({ data }) =>
@@ -126,6 +136,36 @@ const GitRpcHandlersLive = LazyDiffRpcs.toLayer(
           })),
           Stream.mapError(toGitStatusError)
         ),
+      "github.pr.annotations.post": ({ data }) =>
+        Effect.gen(function* () {
+          const review = yield* Option.match(pullRequestSession.review, {
+            onNone: () =>
+              Effect.fail(
+                new GithubPrAnnotationsError({
+                  message:
+                    "Sending annotations is only available while reviewing a pull request with --pr.",
+                })
+              ),
+            onSome: Effect.succeed,
+          });
+
+          const comment = yield* vcs
+            .createPullRequestIssueComment(
+              {
+                host: "github.com",
+                number: review.number,
+                owner: review.owner,
+                repo: review.repo,
+              },
+              data.body
+            )
+            .pipe(Effect.mapError(toGithubPrAnnotationsError));
+
+          return {
+            data: { htmlUrl: comment.htmlUrl },
+            type: "github.pr.annotations.posted" as const,
+          };
+        }),
     };
   })
 );

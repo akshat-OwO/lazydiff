@@ -196,3 +196,7 @@ export const gitRepositoryAtom = LazyDiffRpcClient.query(
     timeToLive: "Infinity",
   }
 );
+
+export const githubPrAnnotationsPostMutation = LazyDiffRpcClient.mutation(
+  "github.pr.annotations.post"
+);

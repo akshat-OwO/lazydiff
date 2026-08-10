@@ -3,6 +3,7 @@ import {
   ClipboardCopyIcon,
   LinkIcon,
   MessageSquareTextIcon,
+  SendHorizontalIcon,
   Trash2Icon,
   XIcon,
 } from "lucide-react";
@@ -22,7 +23,11 @@ import {
 } from "@/lib/annotations";
 import type { DiffAnnotation } from "@/lib/annotations";
 import { copyTextToClipboard } from "@/lib/clipboard";
-import { gitChangeScopeAtom } from "@/lib/rpc";
+import {
+  gitChangeScopeAtom,
+  githubPrAnnotationsPostMutation,
+  gitRepositoryAtom,
+} from "@/lib/rpc";
 import { cn } from "@/lib/utils";
 
 function AnnotationCard({
@@ -75,8 +80,9 @@ function AnnotationCard({
 }
 
 type CopyState = "idle" | "copying" | "copied" | "failed";
+type SendState = "idle" | "sending" | "sent" | "failed";
 
-function copyButtonLabel(copyState: CopyState) {
+function copyButtonLabel(copyState: CopyState, compact: boolean) {
   if (copyState === "copying") {
     return "Copying…";
   }
@@ -89,17 +95,42 @@ function copyButtonLabel(copyState: CopyState) {
     return "Copy failed";
   }
 
-  return "Copy annotations";
+  return compact ? "Copy" : "Copy annotations";
+}
+
+function sendButtonLabel(sendState: SendState) {
+  if (sendState === "sending") {
+    return "Sending…";
+  }
+
+  if (sendState === "sent") {
+    return "Sent to PR";
+  }
+
+  if (sendState === "failed") {
+    return "Send failed";
+  }
+
+  return "Send to remote";
 }
 
 function AnnotationsSidebar() {
   const scope = useAtomValue(gitChangeScopeAtom);
+  const repository = useAtomValue(gitRepositoryAtom);
   const allAnnotations = useAtomValue(annotationsAtom);
   const setAnnotations = useAtomSet(annotationsAtom);
   const setFocus = useAtomSet(annotationFocusAtom);
+  const sendAnnotations = useAtomSet(githubPrAnnotationsPostMutation, {
+    mode: "promise",
+  });
   const annotations = annotationsForScope(allAnnotations, scope);
   const [open, setOpen] = useAtom(annotationsSidebarOpenAtom);
   const [copyState, setCopyState] = useState<CopyState>("idle");
+  const [sendState, setSendState] = useState<SendState>("idle");
+  const [sendError, setSendError] = useState<string | undefined>();
+  const isPullRequestReview =
+    repository._tag === "Success" &&
+    repository.value.data.source === "pull-request";
 
   if (!open) {
     return null;
@@ -122,6 +153,37 @@ function AnnotationsSidebar() {
       }
 
       window.setTimeout(() => setCopyState("idle"), 2000);
+    })();
+  };
+
+  const sendAnnotationsToRemote = () => {
+    if (sendState === "sending" || annotations.length === 0) {
+      return;
+    }
+
+    const body = formatAnnotationsMarkdown(annotations);
+    setSendError(undefined);
+    setSendState("sending");
+
+    void (async () => {
+      try {
+        await sendAnnotations({
+          payload: {
+            data: { body },
+            type: "github.pr.annotations.post",
+          },
+        });
+        setSendState("sent");
+      } catch (error) {
+        setSendState("failed");
+        setSendError(
+          error instanceof Error
+            ? error.message
+            : "Unable to send annotations to the pull request"
+        );
+      }
+
+      window.setTimeout(() => setSendState("idle"), 2000);
     })();
   };
 
@@ -185,17 +247,41 @@ function AnnotationsSidebar() {
         )}
       </ScrollArea>
 
-      <div className="border-sidebar-border border-t p-3">
-        <Button
-          className="w-full"
-          disabled={annotations.length === 0 || copyState === "copying"}
-          onClick={copyAnnotations}
-          type="button"
-          variant="outline"
+      <div className="border-sidebar-border space-y-2 border-t p-3">
+        <div
+          className={cn(
+            "grid gap-2",
+            isPullRequestReview ? "grid-cols-2" : "grid-cols-1"
+          )}
         >
-          <ClipboardCopyIcon data-icon="inline-start" />
-          {copyButtonLabel(copyState)}
-        </Button>
+          <Button
+            className="w-full"
+            disabled={annotations.length === 0 || copyState === "copying"}
+            onClick={copyAnnotations}
+            type="button"
+            variant="outline"
+          >
+            <ClipboardCopyIcon data-icon="inline-start" />
+            {copyButtonLabel(copyState, isPullRequestReview)}
+          </Button>
+          {isPullRequestReview ? (
+            <Button
+              className="w-full"
+              disabled={annotations.length === 0 || sendState === "sending"}
+              onClick={sendAnnotationsToRemote}
+              type="button"
+              variant="outline"
+            >
+              <SendHorizontalIcon data-icon="inline-start" />
+              {sendButtonLabel(sendState)}
+            </Button>
+          ) : null}
+        </div>
+        {sendError === undefined ? null : (
+          <p className="text-destructive text-xs" role="alert">
+            {sendError}
+          </p>
+        )}
       </div>
     </aside>
   );

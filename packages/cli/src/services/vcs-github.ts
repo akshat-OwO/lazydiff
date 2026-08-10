@@ -47,11 +47,18 @@ const GithubPullRequestFile = Schema.Struct({
 
 const GithubPullRequestFiles = Schema.Array(GithubPullRequestFile);
 
+const GithubIssueComment = Schema.Struct({
+  html_url: Schema.String,
+});
+
 const decodePullRequest = Schema.decodeEffect(
   Schema.toCodecJson(GithubPullRequest)
 );
 const decodePullRequestFiles = Schema.decodeEffect(
   Schema.toCodecJson(GithubPullRequestFiles)
+);
+const decodeIssueComment = Schema.decodeEffect(
+  Schema.toCodecJson(GithubIssueComment)
 );
 
 const authenticationHelp =
@@ -148,15 +155,17 @@ const makeAuthedClient = (
 const responseError = (
   response: HttpClientResponse.HttpClientResponse,
   hasToken: boolean,
-  ref: PullRequestRef
+  ref: PullRequestRef,
+  action: "fetch" | "comment" = "fetch"
 ) => {
   const pullRequestUrl = formatGithubPullRequestUrl(ref);
+  const actionVerb = action === "comment" ? "comment on" : "fetch";
 
   if (response.status === 401 || response.status === 403) {
     return new VcsError({
       message: hasToken
-        ? `GitHub rejected credentials while fetching ${pullRequestUrl}. ${authenticationHelp}`
-        : `GitHub authentication is required to fetch ${pullRequestUrl}. ${authenticationHelp}`,
+        ? `GitHub rejected credentials while trying to ${actionVerb} ${pullRequestUrl}. ${authenticationHelp}`
+        : `GitHub authentication is required to ${actionVerb} ${pullRequestUrl}. ${authenticationHelp}`,
       reason: "AuthenticationRequired",
     });
   }
@@ -203,6 +212,31 @@ const getOkResponse = (
 
     if (response.status < 200 || response.status >= 300) {
       return yield* Effect.fail(responseError(response, hasToken, ref));
+    }
+
+    return response;
+  });
+
+const executeOkResponse = (
+  client: HttpClient.HttpClient,
+  hasToken: boolean,
+  ref: PullRequestRef,
+  request: HttpClientRequest.HttpClientRequest,
+  action: "fetch" | "comment"
+) =>
+  Effect.gen(function* () {
+    const response = yield* client.execute(request).pipe(
+      Effect.mapError(
+        (error) =>
+          new VcsError({
+            message: `Unable to reach GitHub for ${formatGithubPullRequestUrl(ref)}: ${error.message}`,
+            reason: "HttpError",
+          })
+      )
+    );
+
+    if (response.status < 200 || response.status >= 300) {
+      return yield* Effect.fail(responseError(response, hasToken, ref, action));
     }
 
     return response;
@@ -326,6 +360,14 @@ const make = Effect.gen(function* () {
   const httpClient = yield* HttpClient.HttpClient;
   const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
+  const resolveToken = () =>
+    resolveGithubToken().pipe(
+      Effect.provideService(
+        ChildProcessSpawner.ChildProcessSpawner,
+        childProcessSpawner
+      )
+    );
+
   const fetchPullRequest = Effect.fn(
     "lazydiff/services/vcsGithub/fetchPullRequest"
   )(function* (url: string) {
@@ -341,12 +383,7 @@ const make = Effect.gen(function* () {
         onSome: Effect.succeed,
       })
     );
-    const token = yield* resolveGithubToken().pipe(
-      Effect.provideService(
-        ChildProcessSpawner.ChildProcessSpawner,
-        childProcessSpawner
-      )
-    );
+    const token = yield* resolveToken();
     const client = makeAuthedClient(httpClient, token);
     const hasToken = Option.isSome(token);
     const [metadata, files, patch] = yield* Effect.all(
@@ -373,7 +410,65 @@ const make = Effect.gen(function* () {
     return review;
   });
 
-  return { fetchPullRequest };
+  const createPullRequestIssueComment = Effect.fn(
+    "lazydiff/services/vcsGithub/createPullRequestIssueComment"
+  )(function* (ref: PullRequestRef, body: string) {
+    const pullRequestUrl = formatGithubPullRequestUrl(ref);
+    const token = yield* resolveToken();
+
+    if (Option.isNone(token)) {
+      return yield* Effect.fail(
+        new VcsError({
+          message: `GitHub authentication is required to comment on ${pullRequestUrl}. ${authenticationHelp}`,
+          reason: "AuthenticationRequired",
+        })
+      );
+    }
+
+    const client = makeAuthedClient(httpClient, token);
+    const request = yield* HttpClientRequest.post(
+      `${githubApiBaseUrl}/repos/${ref.owner}/${ref.repo}/issues/${ref.number}/comments`,
+      { accept: "application/vnd.github+json" }
+    ).pipe(
+      HttpClientRequest.bodyJson({ body }),
+      Effect.mapError(
+        (error) =>
+          new VcsError({
+            message: `Unable to encode GitHub comment for ${pullRequestUrl}: ${error.message}`,
+            reason: "DecodeError",
+          })
+      )
+    );
+    const response = yield* executeOkResponse(
+      client,
+      true,
+      ref,
+      request,
+      "comment"
+    );
+    const json = yield* response.json.pipe(
+      Effect.mapError(
+        (error) =>
+          new VcsError({
+            message: `Unable to read GitHub comment response: ${error.message}`,
+            reason: "DecodeError",
+          })
+      )
+    );
+    const comment = yield* decodeIssueComment(json).pipe(
+      Effect.mapError(
+        (error) =>
+          new VcsError({
+            message: `Unable to decode GitHub comment response: ${error.message}`,
+            reason: "DecodeError",
+          })
+      )
+    );
+
+    return { htmlUrl: comment.html_url };
+  });
+
+  return { createPullRequestIssueComment, fetchPullRequest };
 });
 
 export const GithubLive = Layer.effect(VCSService, make);

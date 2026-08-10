@@ -5,11 +5,13 @@ import { GitBranchError } from "./git-branch-error.ts";
 import { GitDiffError } from "./git-diff-error.ts";
 import { GitChangedFilesError } from "./git-errors.ts";
 import { GitStatusError } from "./git-status-error.ts";
+import { GithubPrAnnotationsError } from "./github-pr-annotations-error.ts";
 
 export { GitBranchError } from "./git-branch-error.ts";
 export { GitDiffError } from "./git-diff-error.ts";
 export { GitChangedFilesError } from "./git-errors.ts";
 export { GitStatusError } from "./git-status-error.ts";
+export { GithubPrAnnotationsError } from "./github-pr-annotations-error.ts";
 
 export const BrandId = Schema.Literals([
   "git.branch.create",
@@ -31,6 +33,8 @@ export const BrandId = Schema.Literals([
   "git.status.get",
   "git.status.result",
   "git.status.subscribe",
+  "github.pr.annotations.post",
+  "github.pr.annotations.posted",
 ]);
 
 export type BrandId = typeof BrandId.Type;
@@ -275,6 +279,24 @@ export const GitStatusResult = Schema.Struct({
 
 export type GitStatusResult = typeof GitStatusResult.Type;
 
+export const GithubPrAnnotationsPost = Schema.Struct({
+  data: Schema.Struct({
+    body: NonEmptyString,
+  }),
+  type: Schema.Literal("github.pr.annotations.post"),
+});
+
+export type GithubPrAnnotationsPost = typeof GithubPrAnnotationsPost.Type;
+
+export const GithubPrAnnotationsPosted = Schema.Struct({
+  data: Schema.Struct({
+    htmlUrl: NonEmptyString,
+  }),
+  type: Schema.Literal("github.pr.annotations.posted"),
+});
+
+export type GithubPrAnnotationsPosted = typeof GithubPrAnnotationsPosted.Type;
+
 const GitBranchSubscribeRpc = Rpc.make("git.branch.subscribe", {
   payload: GitBranchSubscribe,
   stream: true,
@@ -336,6 +358,12 @@ const GitStatusSubscribeRpc = Rpc.make("git.status.subscribe", {
   success: GitStatusResult,
 });
 
+const GithubPrAnnotationsPostRpc = Rpc.make("github.pr.annotations.post", {
+  error: GithubPrAnnotationsError,
+  payload: GithubPrAnnotationsPost,
+  success: GithubPrAnnotationsPosted,
+});
+
 export class LazyDiffRpcs extends RpcGroup.make(
   GitBranchCreateRpc,
   GitBranchDeleteRpc,
@@ -346,5 +374,6 @@ export class LazyDiffRpcs extends RpcGroup.make(
   GitDiffSubscribeRpc,
   GitRepositoryGetRpc,
   GitStatusGetRpc,
-  GitStatusSubscribeRpc
+  GitStatusSubscribeRpc,
+  GithubPrAnnotationsPostRpc
 ) {}

@@ -8,6 +8,7 @@ import {
   withAvailableListenPort,
 } from "@/services/listen-port";
 import { makePrGitLive } from "@/services/pr-git";
+import { makePullRequestSessionLive } from "@/services/pull-request-session";
 import {
   formatStartupOutput,
   shouldShowHttpLogs,
@@ -137,11 +138,20 @@ export const commands = Command.make(
       );
 
       return yield* runReviewServer({ noBrowser }).pipe(
-        Effect.provide(makePrGitLive(pullRequest))
+        Effect.provide(
+          Layer.merge(
+            makePrGitLive(pullRequest),
+            makePullRequestSessionLive(Option.some(pullRequest))
+          )
+        )
       );
     }
 
-    return yield* runReviewServer({ noBrowser }).pipe(Effect.provide(GitLive));
+    return yield* runReviewServer({ noBrowser }).pipe(
+      Effect.provide(
+        Layer.merge(GitLive, makePullRequestSessionLive(Option.none()))
+      )
+    );
   })
 ).pipe(
   Command.withDescription(
