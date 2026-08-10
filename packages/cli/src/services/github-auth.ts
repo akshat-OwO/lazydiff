@@ -41,16 +41,19 @@ const readGhAuthToken = Effect.fn(
 );
 
 /**
- * Resolves a GitHub token from the `gh` CLI first, then `GITHUB_TOKEN`.
+ * Resolves a GitHub token from `GITHUB_TOKEN` first, then the `gh` CLI.
+ *
+ * An explicit env token wins so private-repo access can override an ambient
+ * `gh` login that does not have the needed repository permissions.
  */
 export const resolveGithubToken = Effect.fn(
   "lazydiff/services/githubAuth/resolveGithubToken"
 )(function* () {
-  const fromGh = yield* readGhAuthToken();
+  const fromEnv = yield* readGithubTokenFromEnv;
 
-  if (Option.isSome(fromGh)) {
-    return fromGh;
+  if (Option.isSome(fromEnv)) {
+    return fromEnv;
   }
 
-  return yield* readGithubTokenFromEnv;
+  return yield* readGhAuthToken();
 });

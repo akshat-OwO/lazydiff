@@ -14,7 +14,7 @@ To review a GitHub pull request:
 npx lazydiff --pr https://github.com/owner/repo/pull/123
 ```
 
-Public pull requests need no credentials. Private repositories use `gh auth token`, or `GITHUB_TOKEN` when the GitHub CLI is unavailable.
+Public pull requests need no credentials. Private repositories use `GITHUB_TOKEN`, or `gh auth login` when no env token is set. `GITHUB_TOKEN` takes precedence over the GitHub CLI.
 
 Lazydiff starts a local server and opens the review interface in your browser. Use `npx lazydiff --no-browser` to print the URL without opening it.
 
