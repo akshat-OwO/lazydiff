@@ -1,5 +1,6 @@
 import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react";
 import type { GithubPrReviewThread } from "@lazydiff/protocol";
+import { ChevronRightIcon } from "lucide-react";
 import { useId, useState } from "react";
 
 import { TypesetMarkdown } from "@/components/typeset-markdown";
@@ -29,6 +30,8 @@ function RemoteReviewThread({ className, thread }: RemoteReviewThreadProps) {
   const [reply, setReply] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | undefined>();
+  // null follows the default: expanded when open, collapsed when resolved.
+  const [userExpanded, setUserExpanded] = useState<boolean | null>(null);
   const formId = useId();
   const [parentComment] = thread.comments;
 
@@ -42,6 +45,8 @@ function RemoteReviewThread({ className, thread }: RemoteReviewThreadProps) {
           (candidate) => candidate.id === thread.id
         ) ?? thread)
       : thread;
+
+  const expanded = userExpanded ?? !liveThread.isResolved;
 
   const runAction = async (action: () => Promise<void>) => {
     if (pending) {
@@ -65,6 +70,12 @@ function RemoteReviewThread({ className, thread }: RemoteReviewThreadProps) {
     }
   };
 
+  const replyCount = liveThread.comments.length - 1;
+  const collapsedSummary =
+    replyCount > 0
+      ? `${parentComment.authorLogin} · Resolved · ${replyCount} ${replyCount === 1 ? "reply" : "replies"}`
+      : `${parentComment.authorLogin} · Resolved`;
+
   return (
     <div
       className={cn(
@@ -74,29 +85,53 @@ function RemoteReviewThread({ className, thread }: RemoteReviewThreadProps) {
       )}
     >
       <header className="border-border flex items-center justify-between gap-2 border-b px-3 py-2">
-        <div className="min-w-0">
-          <p className="truncate text-sm font-semibold">
-            {parentComment.authorLogin}
-            {liveThread.isResolved ? " · Resolved" : ""}
-            {liveThread.isOutdated ? " · Outdated" : ""}
-          </p>
-          <p className="text-muted-foreground text-xs">
-            {new Date(parentComment.createdAt).toLocaleString()}
-          </p>
-        </div>
+        <button
+          aria-expanded={expanded}
+          className="flex min-w-0 flex-1 items-center gap-1 text-left"
+          onClick={() => setUserExpanded(!expanded)}
+          type="button"
+        >
+          <ChevronRightIcon
+            className={cn(
+              "text-muted-foreground size-3.5 shrink-0 transition-transform",
+              expanded && "rotate-90"
+            )}
+          />
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold">
+              {liveThread.isResolved && !expanded
+                ? collapsedSummary
+                : [
+                    parentComment.authorLogin,
+                    liveThread.isResolved ? "Resolved" : undefined,
+                    liveThread.isOutdated ? "Outdated" : undefined,
+                  ]
+                    .filter((part) => part !== undefined)
+                    .join(" · ")}
+            </p>
+            {expanded ? (
+              <p className="text-muted-foreground text-xs">
+                {new Date(parentComment.createdAt).toLocaleString()}
+              </p>
+            ) : null}
+          </div>
+        </button>
         <Button
           disabled={pending}
           onClick={() =>
             runAction(async () => {
+              const nextResolved = !liveThread.isResolved;
               await resolveThread({
                 payload: {
                   data: {
-                    resolved: !liveThread.isResolved,
+                    resolved: nextResolved,
                     threadId: liveThread.id,
                   },
                   type: "github.pr.review-threads.resolve",
                 },
               });
+              // Return to the default expand/collapse for the new resolve state.
+              setUserExpanded(null);
             })
           }
           size="xs"
@@ -107,68 +142,70 @@ function RemoteReviewThread({ className, thread }: RemoteReviewThreadProps) {
         </Button>
       </header>
 
-      <div className="space-y-3 px-3 py-2">
-        {liveThread.comments.map((comment) => (
-          <div className="space-y-1" key={comment.id}>
-            {comment.id === parentComment.id ? null : (
-              <p className="text-muted-foreground text-xs font-medium">
-                {comment.authorLogin}
-              </p>
-            )}
-            <TypesetMarkdown>{comment.body}</TypesetMarkdown>
-          </div>
-        ))}
+      {expanded ? (
+        <div className="space-y-3 px-3 py-2">
+          {liveThread.comments.map((comment) => (
+            <div className="space-y-1" key={comment.id}>
+              {comment.id === parentComment.id ? null : (
+                <p className="text-muted-foreground text-xs font-medium">
+                  {comment.authorLogin}
+                </p>
+              )}
+              <TypesetMarkdown>{comment.body}</TypesetMarkdown>
+            </div>
+          ))}
 
-        <form
-          className="space-y-2"
-          id={formId}
-          onSubmit={(event) => {
-            event.preventDefault();
-            const trimmed = reply.trim();
+          <form
+            className="space-y-2"
+            id={formId}
+            onSubmit={(event) => {
+              event.preventDefault();
+              const trimmed = reply.trim();
 
-            if (trimmed.length === 0) {
-              return;
-            }
+              if (trimmed.length === 0) {
+                return;
+              }
 
-            void runAction(async () => {
-              await replyToComment({
-                payload: {
-                  data: {
-                    body: trimmed,
-                    commentId: parentComment.databaseId,
+              void runAction(async () => {
+                await replyToComment({
+                  payload: {
+                    data: {
+                      body: trimmed,
+                      commentId: parentComment.databaseId,
+                    },
+                    type: "github.pr.review-comments.reply",
                   },
-                  type: "github.pr.review-comments.reply",
-                },
+                });
+                setReply("");
               });
-              setReply("");
-            });
-          }}
-        >
-          <Textarea
-            aria-label="Reply to review comment"
-            disabled={pending}
-            onChange={(event) => setReply(event.target.value)}
-            placeholder="Reply…"
-            rows={2}
-            value={reply}
-          />
-          <div className="flex items-center justify-end gap-2">
-            <Button
-              disabled={pending || reply.trim().length === 0}
-              size="sm"
-              type="submit"
-            >
-              Reply
-            </Button>
-          </div>
-        </form>
+            }}
+          >
+            <Textarea
+              aria-label="Reply to review comment"
+              disabled={pending}
+              onChange={(event) => setReply(event.target.value)}
+              placeholder="Reply…"
+              rows={2}
+              value={reply}
+            />
+            <div className="flex items-center justify-end gap-2">
+              <Button
+                disabled={pending || reply.trim().length === 0}
+                size="sm"
+                type="submit"
+              >
+                Reply
+              </Button>
+            </div>
+          </form>
 
-        {error === undefined ? null : (
-          <p className="text-destructive text-xs" role="alert">
-            {error}
-          </p>
-        )}
-      </div>
+          {error === undefined ? null : (
+            <p className="text-destructive text-xs" role="alert">
+              {error}
+            </p>
+          )}
+        </div>
+      ) : null}
     </div>
   );
 }
