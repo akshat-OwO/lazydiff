@@ -303,7 +303,12 @@ function FileDiffCard({
       if (annotation.metadata.kind === "remote") {
         const thread = remoteThreadsById.get(annotation.metadata.threadId);
         return thread === undefined ? null : (
-          <RemoteReviewThread thread={thread} />
+          <RemoteReviewThread
+            // Remount when resolve state changes so collapsed-by-default
+            // applies without carrying over expand state from an open thread.
+            key={`${thread.id}:${thread.isResolved ? "resolved" : "open"}`}
+            thread={thread}
+          />
         );
       }
 

@@ -30,8 +30,7 @@ function RemoteReviewThread({ className, thread }: RemoteReviewThreadProps) {
   const [reply, setReply] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | undefined>();
-  // null follows the default: expanded when open, collapsed when resolved.
-  const [userExpanded, setUserExpanded] = useState<boolean | null>(null);
+  const [expanded, setExpanded] = useState(!thread.isResolved);
   const formId = useId();
   const [parentComment] = thread.comments;
 
@@ -45,8 +44,6 @@ function RemoteReviewThread({ className, thread }: RemoteReviewThreadProps) {
           (candidate) => candidate.id === thread.id
         ) ?? thread)
       : thread;
-
-  const expanded = userExpanded ?? !liveThread.isResolved;
 
   const runAction = async (action: () => Promise<void>) => {
     if (pending) {
@@ -88,7 +85,7 @@ function RemoteReviewThread({ className, thread }: RemoteReviewThreadProps) {
         <button
           aria-expanded={expanded}
           className="flex min-w-0 flex-1 items-center gap-1 text-left"
-          onClick={() => setUserExpanded(!expanded)}
+          onClick={() => setExpanded((current) => !current)}
           type="button"
         >
           <ChevronRightIcon
@@ -120,18 +117,15 @@ function RemoteReviewThread({ className, thread }: RemoteReviewThreadProps) {
           disabled={pending}
           onClick={() =>
             runAction(async () => {
-              const nextResolved = !liveThread.isResolved;
               await resolveThread({
                 payload: {
                   data: {
-                    resolved: nextResolved,
+                    resolved: !liveThread.isResolved,
                     threadId: liveThread.id,
                   },
                   type: "github.pr.review-threads.resolve",
                 },
               });
-              // Return to the default expand/collapse for the new resolve state.
-              setUserExpanded(null);
             })
           }
           size="xs"
