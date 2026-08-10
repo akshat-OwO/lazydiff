@@ -11,8 +11,10 @@ import type { VcsError } from "@/services/vcs-error";
 
 export { VcsError } from "@/services/vcs-error";
 
+export type PullRequestHost = "bitbucket.org" | "github.com";
+
 export interface PullRequestRef {
-  readonly host: "github.com";
+  readonly host: PullRequestHost;
   readonly number: number;
   readonly owner: string;
   readonly repo: string;
@@ -23,6 +25,7 @@ export interface PullRequestReview {
   readonly entries: readonly GitStatusEntry[];
   readonly headRefName: string;
   readonly headSha: string;
+  readonly host: PullRequestHost;
   readonly number: number;
   readonly owner: string;
   readonly patch: string;

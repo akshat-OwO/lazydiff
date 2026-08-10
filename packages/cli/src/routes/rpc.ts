@@ -59,7 +59,7 @@ const requirePullRequestReview = (
   });
 
 const pullRequestRefOf = (review: PullRequestReview): PullRequestRef => ({
-  host: "github.com",
+  host: review.host,
   number: review.number,
   owner: review.owner,
   repo: review.repo,

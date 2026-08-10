@@ -601,7 +601,7 @@ const fetchPullRequestDiff = (
     );
   });
 
-const make = Effect.gen(function* () {
+export const makeGithubVcs = Effect.gen(function* () {
   const httpClient = yield* HttpClient.HttpClient;
   const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
@@ -654,6 +654,7 @@ const make = Effect.gen(function* () {
       entries: mapGithubFiles(files),
       headRefName: metadata.head.ref,
       headSha: metadata.head.sha,
+      host: "github.com",
       number: metadata.number,
       owner: ref.owner,
       patch,
@@ -947,4 +948,4 @@ const make = Effect.gen(function* () {
   };
 });
 
-export const GithubLive = Layer.effect(VCSService, make);
+export const GithubLive = Layer.effect(VCSService, makeGithubVcs);
