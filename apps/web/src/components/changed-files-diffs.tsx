@@ -41,11 +41,17 @@ import { unquoteGitPath } from "@/lib/git-path";
 import { preloadFileDiffHighlighter } from "@/lib/preload-file-diff-highlighter";
 import { gitDiffAtom } from "@/lib/rpc";
 
+/** Above this many files, start collapsed so the pane stays interactive. */
+const autoCollapseFileCount = 40;
+
 const withoutPath = (paths: ReadonlySet<string>, path: string) => {
   const next = new Set(paths);
   next.delete(path);
   return next;
 };
+
+const allPaths = (fileDiffs: readonly FileDiffMetadata[]) =>
+  new Set(fileDiffs.map((fileDiff) => fileDiff.name));
 
 const measureSectionContentTops = (
   scrollport: HTMLElement,
@@ -123,6 +129,16 @@ function ChangedFilesDiffs() {
             .toSorted((left, right) => left.name.localeCompare(right.name)),
     [patch]
   );
+  const [collapseSource, setCollapseSource] = useState(fileDiffs);
+
+  if (fileDiffs !== collapseSource) {
+    setCollapseSource(fileDiffs);
+    setCollapsedPaths(
+      fileDiffs.length >= autoCollapseFileCount
+        ? allPaths(fileDiffs)
+        : new Set()
+    );
+  }
   const [highlighterPreload, setHighlighterPreload] =
     useState<HighlighterPreloadState | null>(null);
   const [preloadAttempt, setPreloadAttempt] = useState(0);
@@ -281,9 +297,13 @@ function ChangedFilesDiffs() {
 
     resizeObserver.observe(scrollport);
 
-    for (const child of scrollport.children) {
-      if (child instanceof HTMLElement) {
-        resizeObserver.observe(child);
+    // Per-child observers stay cheap for small reviews; large PRs rely on
+    // content-visibility + collapsed defaults instead of thousands of observers.
+    if (fileDiffs.length < autoCollapseFileCount) {
+      for (const child of scrollport.children) {
+        if (child instanceof HTMLElement) {
+          resizeObserver.observe(child);
+        }
       }
     }
 

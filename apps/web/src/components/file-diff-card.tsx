@@ -4,7 +4,7 @@ import type {
   FileDiffMetadata,
   SelectedLineRange,
 } from "@pierre/diffs";
-import { FileDiff } from "@pierre/diffs/react";
+import { FileDiff, Virtualizer } from "@pierre/diffs/react";
 import { ChevronRightIcon } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import type { ReactNode } from "react";
@@ -116,16 +116,18 @@ function FileDiffBody({
   }
 
   return (
-    <FileDiff
-      // Remount to clear Pierre's uncontrolled selection after opening a draft.
-      // Passing selectedLines would enable controlled mode, which breaks live
-      // multi-line selection rendering and commits the wrong range.
-      key={selectionResetKey}
-      fileDiff={fileDiff}
-      options={options}
-      renderAnnotation={renderAnnotation}
-      {...(lineAnnotations === undefined ? {} : { lineAnnotations })}
-    />
+    <Virtualizer className="max-h-[min(70vh,48rem)] overflow-auto">
+      <FileDiff
+        // Remount to clear Pierre's uncontrolled selection after opening a draft.
+        // Passing selectedLines would enable controlled mode, which breaks live
+        // multi-line selection rendering and commits the wrong range.
+        key={selectionResetKey}
+        fileDiff={fileDiff}
+        options={options}
+        renderAnnotation={renderAnnotation}
+        {...(lineAnnotations === undefined ? {} : { lineAnnotations })}
+      />
+    </Virtualizer>
   );
 }
 
@@ -268,7 +270,7 @@ function FileDiffCard({
 
   return (
     <section
-      className="scroll-mt-0 border-b"
+      className="scroll-mt-0 border-b [contain-intrinsic-size:auto_2.75rem] [content-visibility:auto]"
       id={fileDiffAnchorId(fileDiff.name)}
     >
       <button

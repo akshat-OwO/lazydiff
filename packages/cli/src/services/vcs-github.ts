@@ -4,6 +4,7 @@ import type { Redacted } from "effect";
 import type { HttpClientResponse } from "effect/unstable/http";
 import { Headers, HttpClient, HttpClientRequest } from "effect/unstable/http";
 
+import { buildUnifiedPatchFromGithubFiles } from "@/lib/github-pull-request-patch";
 import {
   formatGithubPullRequestUrl,
   parseGithubPullRequestUrl,
@@ -15,7 +16,8 @@ import type { PullRequestRef, PullRequestReview } from "@/services/vcs";
 const githubApiVersion = "2022-11-28";
 const githubApiBaseUrl = "https://api.github.com";
 const userAgent = "lazydiff";
-const maxFilePages = 50;
+/** GitHub rejects the PR-level diff media type above this many files. */
+const githubUnifiedDiffFileLimit = 300;
 
 const GithubPullRequest = Schema.Struct({
   base: Schema.Struct({
@@ -40,6 +42,7 @@ const GithubPullRequestFileStatus = Schema.Literals([
 
 const GithubPullRequestFile = Schema.Struct({
   filename: Schema.String,
+  patch: Schema.optionalKey(Schema.String),
   previous_filename: Schema.optionalKey(Schema.String),
   status: GithubPullRequestFileStatus,
 });
@@ -251,11 +254,7 @@ const fetchPullRequestFiles = (
     let pageUrl: string | undefined =
       `${githubApiBaseUrl}/repos/${ref.owner}/${ref.repo}/pulls/${ref.number}/files?per_page=100`;
 
-    for (
-      let page = 0;
-      page < maxFilePages && pageUrl !== undefined;
-      page += 1
-    ) {
+    while (pageUrl !== undefined) {
       const response = yield* getOkResponse(client, hasToken, ref, pageUrl, {
         accept: "application/vnd.github+json",
       });
@@ -280,15 +279,6 @@ const fetchPullRequestFiles = (
 
       files.push(...pageFiles);
       pageUrl = nextLinkUrl(Headers.get(response.headers, "link"));
-    }
-
-    if (pageUrl !== undefined) {
-      return yield* Effect.fail(
-        new VcsError({
-          message: `Pull request ${formatGithubPullRequestUrl(ref)} has too many changed files to load.`,
-          reason: "Unsupported",
-        })
-      );
     }
 
     return files;
@@ -321,6 +311,24 @@ const fetchPullRequestDiff = (
     );
   });
 
+const resolvePullRequestPatch = (
+  client: HttpClient.HttpClient,
+  hasToken: boolean,
+  ref: PullRequestRef,
+  files: readonly (typeof GithubPullRequestFile.Type)[]
+) => {
+  if (files.length > githubUnifiedDiffFileLimit) {
+    return Effect.succeed(buildUnifiedPatchFromGithubFiles(files));
+  }
+
+  return fetchPullRequestDiff(client, hasToken, ref).pipe(
+    Effect.catchIf(
+      (error) => error.reason === "Unsupported",
+      () => Effect.succeed(buildUnifiedPatchFromGithubFiles(files))
+    )
+  );
+};
+
 const make = Effect.gen(function* () {
   const httpClient = yield* HttpClient.HttpClient;
   const githubAuth = yield* GithubAuth;
@@ -343,14 +351,14 @@ const make = Effect.gen(function* () {
     const token = yield* githubAuth.resolveToken();
     const client = makeAuthedClient(httpClient, token);
     const hasToken = Option.isSome(token);
-    const [metadata, files, patch] = yield* Effect.all(
+    const [metadata, files] = yield* Effect.all(
       [
         fetchPullRequestMetadata(client, hasToken, ref),
         fetchPullRequestFiles(client, hasToken, ref),
-        fetchPullRequestDiff(client, hasToken, ref),
       ],
       { concurrency: "unbounded" }
     );
+    const patch = yield* resolvePullRequestPatch(client, hasToken, ref, files);
 
     const review: PullRequestReview = {
       baseRefName: metadata.base.ref,
