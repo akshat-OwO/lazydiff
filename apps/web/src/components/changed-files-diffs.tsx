@@ -1,19 +1,21 @@
 import { useAtom, useAtomValue } from "@effect/atom-react";
-import { parsePatchFiles } from "@pierre/diffs";
-import type { FileDiffMetadata } from "@pierre/diffs";
+import type {
+  CodeViewDiffItem,
+  CodeViewItem,
+  DiffLineAnnotation,
+  FileDiffMetadata,
+  SelectedLineRange,
+} from "@pierre/diffs";
+import { CodeView } from "@pierre/diffs/react";
+import type { CodeViewHandle } from "@pierre/diffs/react";
 import { useLocation, useNavigate } from "@tanstack/react-router";
-import { FileDiffIcon, FileWarningIcon } from "lucide-react";
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
-import type { UIEventHandler } from "react";
+import { ChevronRightIcon, FileDiffIcon, FileWarningIcon } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 
-import { FileDiffCard } from "@/components/file-diff-card";
+import { AnnotationDraftForm } from "@/components/annotation-draft-form";
+import { InlineAnnotationComment } from "@/components/inline-annotation-comment";
+import { useTheme } from "@/components/theme-provider";
 import { Button } from "@/components/ui/button";
 import {
   Empty,
@@ -25,168 +27,213 @@ import {
 } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
+  annotationAnchorForRange,
+  extractDiffSnippet,
+} from "@/lib/annotation-snippet";
+import {
   annotationDraftAtom,
   annotationFocusAtom,
+  annotationMatchesFileDiff,
   annotationsAtom,
+  annotationsForScope,
+  draftMatchesFileDiff,
 } from "@/lib/annotations";
+import type { DiffAnnotation } from "@/lib/annotations";
 import {
   annotationInlineAnchorId,
   fileDiffAnchorId,
   fromLocationHash,
   toLocationHash,
 } from "@/lib/file-diff-anchor";
-import { findInViewFilePath } from "@/lib/file-diff-in-view";
-import type { FileDiffSectionContentOffset } from "@/lib/file-diff-in-view";
-import { unquoteGitPath } from "@/lib/git-path";
+import {
+  countChangedLines,
+  describeChangeWithoutHunks,
+  describeModeChange,
+} from "@/lib/file-diff-summary";
+import { parsePatchFileDiffs } from "@/lib/parse-patch-file-diffs";
 import { preloadFileDiffHighlighter } from "@/lib/preload-file-diff-highlighter";
-import { gitDiffAtom } from "@/lib/rpc";
+import { gitChangeScopeAtom, gitDiffAtom } from "@/lib/rpc";
+import { cn } from "@/lib/utils";
 
 /** Above this many files, start collapsed so the pane stays interactive. */
 const autoCollapseFileCount = 40;
 
-const withoutPath = (paths: ReadonlySet<string>, path: string) => {
-  const next = new Set(paths);
-  next.delete(path);
-  return next;
-};
-
-const allPaths = (fileDiffs: readonly FileDiffMetadata[]) =>
-  new Set(fileDiffs.map((fileDiff) => fileDiff.name));
-
-const measureSectionContentTops = (
-  scrollport: HTMLElement,
-  fileDiffs: readonly FileDiffMetadata[]
-): readonly FileDiffSectionContentOffset[] => {
-  const scrollportTop = scrollport.getBoundingClientRect().top;
-  const { scrollTop } = scrollport;
-  const elementsById = new Map<string, HTMLElement>();
-
-  for (const child of scrollport.children) {
-    if (child instanceof HTMLElement && child.id.length > 0) {
-      elementsById.set(child.id, child);
-    }
-  }
-
-  return fileDiffs.flatMap((fileDiff) => {
-    const element = elementsById.get(fileDiffAnchorId(fileDiff.name));
-
-    if (element === undefined) {
-      return [];
-    }
-
-    return [
-      {
-        contentTop:
-          element.getBoundingClientRect().top - scrollportTop + scrollTop,
-        path: fileDiff.name,
-      },
-    ];
-  });
-};
-
-type HighlighterPreloadState =
+type AnnotationMetadata =
   | {
-      readonly _tag: "Ready";
-      readonly attempt: number;
-      readonly fileDiffs: readonly FileDiffMetadata[];
+      readonly annotationId: string;
+      readonly kind: "saved";
     }
   | {
-      readonly _tag: "Failed";
-      readonly attempt: number;
-      readonly fileDiffs: readonly FileDiffMetadata[];
+      readonly kind: "draft";
     };
+
+const gutterUtilityCSS = `
+[data-column-number] {
+  padding-left: calc(1lh + 1ch);
+}
+
+[data-gutter-utility-slot] {
+  left: 4px;
+  right: auto;
+  justify-content: flex-start;
+}
+
+[data-utility-button] {
+  margin-right: 0;
+}
+`;
+
+const toCodeViewItem = (
+  fileDiff: FileDiffMetadata,
+  collapsed: boolean,
+  annotations: DiffLineAnnotation<AnnotationMetadata>[] | undefined,
+  version: number
+): CodeViewDiffItem<AnnotationMetadata> => ({
+  collapsed,
+  fileDiff,
+  id: fileDiffAnchorId(fileDiff.name),
+  type: "diff",
+  version,
+  ...(annotations === undefined ? {} : { annotations }),
+});
 
 function ChangedFilesDiffs() {
   const gitDiff = useAtomValue(gitDiffAtom);
   const annotations = useAtomValue(annotationsAtom);
-  const annotationDraft = useAtomValue(annotationDraftAtom);
   const [annotationFocus, setAnnotationFocus] = useAtom(annotationFocusAtom);
+  const [draft, setDraft] = useAtom(annotationDraftAtom);
+  const scope = useAtomValue(gitChangeScopeAtom);
+  const { theme } = useTheme();
   const navigate = useNavigate();
   const selectedPath = useLocation({
     select: (location) => fromLocationHash(location.hash),
   });
+  const codeViewRef = useRef<CodeViewHandle<AnnotationMetadata>>(null);
+  const scrolledPath = useRef<string | null>(null);
   const [collapsedPaths, setCollapsedPaths] = useState<ReadonlySet<string>>(
     () => new Set()
   );
-  const patch = gitDiff._tag === "Success" ? gitDiff.value.data.patch : "";
-  const fileDiffs = useMemo(
-    () =>
-      patch.length === 0
-        ? []
-        : parsePatchFiles(patch)
-            .flatMap(({ files }) => files)
-            .map((fileDiff) => {
-              // The parser keeps the pathname exactly as the patch header
-              // spells it, which the tree and the hash cannot match.
-              fileDiff.name = unquoteGitPath(fileDiff.name);
-
-              if (fileDiff.prevName !== undefined) {
-                fileDiff.prevName = unquoteGitPath(fileDiff.prevName);
-              }
-
-              return fileDiff;
-            })
-            .toSorted((left, right) => left.name.localeCompare(right.name)),
-    [patch]
+  const [collapseSource, setCollapseSource] = useState<readonly string[]>([]);
+  const [itemVersions, setItemVersions] = useState<ReadonlyMap<string, number>>(
+    () => new Map()
   );
-  const [collapseSource, setCollapseSource] = useState(fileDiffs);
-
-  if (fileDiffs !== collapseSource) {
-    setCollapseSource(fileDiffs);
-    setCollapsedPaths(
-      fileDiffs.length >= autoCollapseFileCount
-        ? allPaths(fileDiffs)
-        : new Set()
-    );
-  }
-  const [highlighterPreload, setHighlighterPreload] =
-    useState<HighlighterPreloadState | null>(null);
+  const [highlighterReadyFor, setHighlighterReadyFor] = useState<
+    readonly FileDiffMetadata[] | null
+  >(null);
+  const [highlighterFailedFor, setHighlighterFailedFor] = useState<
+    readonly FileDiffMetadata[] | null
+  >(null);
   const [preloadAttempt, setPreloadAttempt] = useState(0);
-  const isHighlighterReady =
-    highlighterPreload?._tag === "Ready" &&
-    highlighterPreload.fileDiffs === fileDiffs &&
-    highlighterPreload.attempt === preloadAttempt;
-  const isHighlighterFailed =
-    highlighterPreload?._tag === "Failed" &&
-    highlighterPreload.fileDiffs === fileDiffs &&
-    highlighterPreload.attempt === preloadAttempt;
-  const scrolledPath = useRef<string | null>(null);
-  const scrollFrame = useRef(0);
-  // Ignore scrollspy while hash-driven scrollIntoView is relocating the pane.
-  const ignoreScrollSpy = useRef(false);
-  const scrollportRef = useRef<HTMLDivElement | null>(null);
-  // Content tops are measured only when layout changes, not on every frame.
-  const sectionContentTops = useRef<{
-    readonly key: string;
-    readonly sections: readonly FileDiffSectionContentOffset[];
-  } | null>(null);
-  const sectionLayoutKey = useMemo(() => {
-    const collapsedKey = [...collapsedPaths].toSorted().join("\n");
-    const fileKey = fileDiffs.map((fileDiff) => fileDiff.name).join("\n");
-    const focusKey =
-      annotationFocus === null
-        ? ""
-        : `${annotationFocus.filePath}\0${annotationFocus.annotationId}`;
-    const annotationsKey = annotations
-      .map(
-        (annotation) =>
-          `${annotation.id}\0${annotation.filePath}\0${annotation.comment.length}`
-      )
-      .join("\n");
-    const draftKey =
-      annotationDraft === null
-        ? ""
-        : `${annotationDraft.filePath}\0${annotationDraft.lineNumber}\0${annotationDraft.codeDiff.length}`;
 
-    return `${isHighlighterReady ? "1" : "0"}\n${fileKey}\n${collapsedKey}\n${focusKey}\n${annotationsKey}\n${draftKey}`;
-  }, [
-    annotationDraft,
-    annotationFocus,
-    annotations,
-    collapsedPaths,
-    fileDiffs,
-    isHighlighterReady,
-  ]);
+  const patch = gitDiff._tag === "Success" ? gitDiff.value.data.patch : "";
+  const complete =
+    gitDiff._tag === "Success" ? gitDiff.value.data.complete : true;
+  const fileDiffs = useMemo(() => parsePatchFileDiffs(patch), [patch]);
+  const filePaths = useMemo(
+    () => fileDiffs.map((fileDiff) => fileDiff.name),
+    [fileDiffs]
+  );
+
+  if (filePaths !== collapseSource) {
+    setCollapseSource(filePaths);
+    setCollapsedPaths(
+      fileDiffs.length >= autoCollapseFileCount ? new Set(filePaths) : new Set()
+    );
+    setItemVersions(new Map());
+  }
+
+  const scopedAnnotations = useMemo(
+    () => annotationsForScope(annotations, scope),
+    [annotations, scope]
+  );
+
+  const annotationsById = useMemo(() => {
+    const map = new Map<
+      string,
+      { annotation: DiffAnnotation; number: number }
+    >();
+
+    for (let index = 0; index < scopedAnnotations.length; index += 1) {
+      const annotation = scopedAnnotations[index];
+
+      if (annotation === undefined) {
+        continue;
+      }
+
+      map.set(annotation.id, {
+        annotation,
+        number: index + 1,
+      });
+    }
+
+    return map;
+  }, [scopedAnnotations]);
+
+  const annotationsForFile = useCallback(
+    (fileDiff: FileDiffMetadata) => {
+      const attached = scopedAnnotations.filter((annotation) =>
+        annotationMatchesFileDiff(annotation, fileDiff)
+      );
+      const next: DiffLineAnnotation<AnnotationMetadata>[] = attached.map(
+        (annotation) => {
+          const anchor = annotationAnchorForRange(annotation.range);
+
+          return {
+            lineNumber: anchor.lineNumber,
+            metadata: {
+              annotationId: annotation.id,
+              kind: "saved" as const,
+            },
+            side: anchor.side,
+          };
+        }
+      );
+      const draftForFile =
+        draft !== null &&
+        draft.scope === scope &&
+        draft.filePath === fileDiff.name &&
+        draftMatchesFileDiff(draft, fileDiff)
+          ? draft
+          : null;
+
+      if (draftForFile !== null) {
+        next.push({
+          lineNumber: draftForFile.lineNumber,
+          metadata: { kind: "draft" },
+          side: draftForFile.side,
+        });
+      }
+
+      return next.length === 0 ? undefined : next;
+    },
+    [draft, scope, scopedAnnotations]
+  );
+
+  const items = useMemo(
+    () =>
+      fileDiffs.map((fileDiff) => {
+        const id = fileDiffAnchorId(fileDiff.name);
+
+        return toCodeViewItem(
+          fileDiff,
+          annotationFocus?.filePath === fileDiff.name
+            ? false
+            : collapsedPaths.has(fileDiff.name),
+          annotationsForFile(fileDiff),
+          itemVersions.get(id) ?? 0
+        );
+      }),
+    [
+      annotationFocus?.filePath,
+      annotationsForFile,
+      collapsedPaths,
+      fileDiffs,
+      itemVersions,
+    ]
+  );
+
+  const isHighlighterReady = highlighterReadyFor === fileDiffs;
+  const isHighlighterFailed = highlighterFailedFor === fileDiffs;
 
   useEffect(() => {
     if (fileDiffs.length === 0) {
@@ -199,19 +246,13 @@ function ChangedFilesDiffs() {
       try {
         await preloadFileDiffHighlighter(fileDiffs);
         if (!cancelled) {
-          setHighlighterPreload({
-            _tag: "Ready",
-            attempt: preloadAttempt,
-            fileDiffs,
-          });
+          setHighlighterReadyFor(fileDiffs);
+          setHighlighterFailedFor(null);
         }
       } catch {
         if (!cancelled) {
-          setHighlighterPreload({
-            _tag: "Failed",
-            attempt: preloadAttempt,
-            fileDiffs,
-          });
+          setHighlighterReadyFor(null);
+          setHighlighterFailedFor(fileDiffs);
         }
       }
     })();
@@ -221,10 +262,6 @@ function ChangedFilesDiffs() {
     };
   }, [fileDiffs, preloadAttempt]);
 
-  // Scroll once per selection after real diff heights are in the DOM. Skeletons
-  // are short, so scrolling earlier lands on the wrong place once FileDiff
-  // mounts. Repository refreshes keep the same selection and must not yank
-  // the reader back to that file.
   useEffect(() => {
     if (selectedPath === null) {
       scrolledPath.current = null;
@@ -235,19 +272,12 @@ function ChangedFilesDiffs() {
       return;
     }
 
-    const anchor = document.querySelector(
-      `#${CSS.escape(fileDiffAnchorId(selectedPath))}`
-    );
-
-    if (anchor === null) {
-      return;
-    }
-
-    ignoreScrollSpy.current = true;
     scrolledPath.current = selectedPath;
-    anchor.scrollIntoView({ behavior: "instant", block: "start" });
-    window.requestAnimationFrame(() => {
-      ignoreScrollSpy.current = false;
+    codeViewRef.current?.scrollTo({
+      align: "start",
+      behavior: "instant",
+      id: fileDiffAnchorId(selectedPath),
+      type: "item",
     });
   }, [isHighlighterReady, selectedPath]);
 
@@ -273,127 +303,173 @@ function ChangedFilesDiffs() {
     };
   }, [annotationFocus, isHighlighterReady, setAnnotationFocus]);
 
-  // Invalidate before paint so collapse/expand scroll anchoring cannot reuse
-  // offsets from the previous layout.
-  useLayoutEffect(() => {
-    sectionContentTops.current = null;
+  const onGutterUtilityClick = useCallback(
+    (
+      range: SelectedLineRange,
+      context: { readonly item: CodeViewItem<AnnotationMetadata> }
+    ) => {
+      const { item } = context;
 
-    if (scrollFrame.current !== 0) {
-      window.cancelAnimationFrame(scrollFrame.current);
-      scrollFrame.current = 0;
-    }
-  }, [sectionLayoutKey]);
-
-  useEffect(() => {
-    const scrollport = scrollportRef.current;
-
-    if (scrollport === null || !isHighlighterReady || fileDiffs.length === 0) {
-      return;
-    }
-
-    const resizeObserver = new ResizeObserver(() => {
-      sectionContentTops.current = null;
-    });
-
-    resizeObserver.observe(scrollport);
-
-    // Per-child observers stay cheap for small reviews; large PRs rely on
-    // content-visibility + collapsed defaults instead of thousands of observers.
-    if (fileDiffs.length < autoCollapseFileCount) {
-      for (const child of scrollport.children) {
-        if (child instanceof HTMLElement) {
-          resizeObserver.observe(child);
-        }
-      }
-    }
-
-    return () => {
-      resizeObserver.disconnect();
-    };
-  }, [collapsedPaths, fileDiffs, isHighlighterReady]);
-
-  const onDiffsScroll = useCallback<UIEventHandler<HTMLDivElement>>(
-    (event) => {
-      const scrollport = event.currentTarget;
-
-      if (scrollFrame.current !== 0) {
+      if (item.type !== "diff") {
         return;
       }
 
-      scrollFrame.current = window.requestAnimationFrame(() => {
-        scrollFrame.current = 0;
-
-        if (
-          ignoreScrollSpy.current ||
-          !isHighlighterReady ||
-          fileDiffs.length === 0
-        ) {
-          return;
-        }
-
-        const cached = sectionContentTops.current;
-        const sections =
-          cached !== null && cached.key === sectionLayoutKey
-            ? cached.sections
-            : measureSectionContentTops(scrollport, fileDiffs);
-        sectionContentTops.current = {
-          key: sectionLayoutKey,
-          sections,
-        };
-
-        if (sections.length === 0) {
-          return;
-        }
-
-        const isScrolledToBottom =
-          scrollport.scrollTop + scrollport.clientHeight >=
-          scrollport.scrollHeight - 1;
-        const inViewPath = findInViewFilePath(sections, {
-          activationOffset: 0,
-          isScrolledToBottom,
-          scrollTop: scrollport.scrollTop,
-        });
-
-        if (inViewPath === null || inViewPath === scrolledPath.current) {
-          return;
-        }
-
-        // Mark the path as already in view so the hash scroll effect is a no-op.
-        scrolledPath.current = inViewPath;
-        void navigate({
-          hash: toLocationHash(inViewPath),
-          hashScrollIntoView: false,
-          replace: true,
-          resetScroll: false,
-          to: "/",
-        });
+      const anchor = annotationAnchorForRange(range);
+      setDraft({
+        codeDiff: extractDiffSnippet(item.fileDiff, range),
+        filePath: item.fileDiff.name,
+        lineNumber: anchor.lineNumber,
+        range,
+        scope,
+        side: anchor.side,
+      });
+      void navigate({
+        hash: toLocationHash(item.fileDiff.name),
+        hashScrollIntoView: false,
+        replace: true,
+        resetScroll: false,
+        to: "/",
       });
     },
-    [fileDiffs, isHighlighterReady, navigate, sectionLayoutKey]
+    [navigate, scope, setDraft]
   );
 
-  const toggleCollapsed = useCallback((path: string) => {
-    setCollapsedPaths((paths) =>
-      paths.has(path) ? withoutPath(paths, path) : new Set(paths).add(path)
-    );
-  }, []);
+  const toggleCollapsed = useCallback(
+    (item: CodeViewDiffItem<AnnotationMetadata>) => {
+      setCollapsedPaths((paths) => {
+        const next = new Set(paths);
 
-  const isPathCollapsed = useCallback(
-    (path: string) => {
-      if (annotationFocus?.filePath === path) {
-        return false;
+        if (next.has(item.fileDiff.name)) {
+          next.delete(item.fileDiff.name);
+        } else {
+          next.add(item.fileDiff.name);
+        }
+
+        return next;
+      });
+      setItemVersions(
+        (versions) =>
+          new Map([
+            ...versions,
+            [item.id, (versions.get(item.id) ?? item.version ?? 0) + 1],
+          ])
+      );
+    },
+    []
+  );
+
+  const renderCustomHeader = useCallback(
+    (item: CodeViewItem<AnnotationMetadata>) => {
+      if (item.type !== "diff") {
+        return null;
       }
 
-      return collapsedPaths.has(path);
+      const { additions, deletions } = countChangedLines(item.fileDiff);
+      const modeChange = describeModeChange(item.fileDiff);
+      const changeWithoutHunks = describeChangeWithoutHunks(item.fileDiff);
+
+      return (
+        <button
+          aria-expanded={!item.collapsed}
+          className="bg-muted flex w-full items-center gap-2 px-4 py-2 text-left"
+          onClick={() => {
+            toggleCollapsed(item);
+          }}
+          type="button"
+        >
+          <ChevronRightIcon
+            className={cn(
+              "text-muted-foreground size-4 shrink-0 transition-transform",
+              !item.collapsed && "rotate-90"
+            )}
+          />
+          <span className="truncate font-mono text-xs">
+            {item.fileDiff.prevName === undefined
+              ? item.fileDiff.name
+              : `${item.fileDiff.prevName} → ${item.fileDiff.name}`}
+          </span>
+          {modeChange !== null && (
+            <span className="text-muted-foreground shrink-0 font-mono text-xs">
+              {modeChange}
+            </span>
+          )}
+          {changeWithoutHunks !== null && item.collapsed && (
+            <span className="text-muted-foreground hidden truncate text-xs sm:inline">
+              {changeWithoutHunks}
+            </span>
+          )}
+          <span className="ml-auto shrink-0 font-mono text-xs">
+            <span className="text-destructive">-{deletions}</span>{" "}
+            <span className="text-emerald-600 dark:text-emerald-400">
+              +{additions}
+            </span>
+          </span>
+        </button>
+      );
     },
-    [annotationFocus, collapsedPaths]
+    [toggleCollapsed]
+  );
+
+  const renderAnnotation = useCallback(
+    (
+      annotation: DiffLineAnnotation<AnnotationMetadata>,
+      item: CodeViewItem<AnnotationMetadata>
+    ): ReactNode => {
+      if (item.type !== "diff") {
+        return null;
+      }
+
+      if (annotation.metadata.kind === "draft") {
+        return draft !== null &&
+          draft.filePath === item.fileDiff.name &&
+          draft.scope === scope ? (
+          <AnnotationDraftForm draft={draft} />
+        ) : null;
+      }
+
+      const saved = annotationsById.get(annotation.metadata.annotationId);
+
+      if (saved === undefined) {
+        return null;
+      }
+
+      return (
+        <InlineAnnotationComment
+          annotationId={saved.annotation.id}
+          comment={saved.annotation.comment}
+          number={saved.number}
+        />
+      );
+    },
+    [annotationsById, draft, scope]
+  );
+
+  const codeViewOptions = useMemo(
+    () => ({
+      diffStyle: "unified" as const,
+      disableFileHeader: true as const,
+      enableGutterUtility: true as const,
+      enableLineSelection: true as const,
+      hunkSeparators: "line-info-basic" as const,
+      layout: {
+        gap: 0,
+        paddingBottom: 0,
+        paddingTop: 0,
+      },
+      onGutterUtilityClick,
+      overflow: "wrap" as const,
+      stickyHeaders: true,
+      themeType: theme,
+      unsafeCSS: gutterUtilityCSS,
+    }),
+    [onGutterUtilityClick, theme]
   );
 
   const retryHighlighterPreload = useCallback(() => {
     setPreloadAttempt((attempt) => attempt + 1);
   }, []);
 
-  if (gitDiff._tag === "Initial") {
+  if (gitDiff._tag === "Initial" && fileDiffs.length === 0) {
     return (
       <div
         aria-label="Loading diffs"
@@ -406,7 +482,7 @@ function ChangedFilesDiffs() {
     );
   }
 
-  if (gitDiff._tag === "Failure") {
+  if (gitDiff._tag === "Failure" && fileDiffs.length === 0) {
     return (
       <Empty className="h-full overflow-y-auto">
         <EmptyHeader>
@@ -420,7 +496,7 @@ function ChangedFilesDiffs() {
     );
   }
 
-  if (fileDiffs.length === 0) {
+  if (fileDiffs.length === 0 && complete) {
     return (
       <Empty className="h-full overflow-y-auto">
         <EmptyHeader>
@@ -459,21 +535,30 @@ function ChangedFilesDiffs() {
   }
 
   return (
-    <div
-      className="absolute inset-0 overflow-y-auto"
-      data-slot="file-diffs-scrollport"
-      onScroll={onDiffsScroll}
-      ref={scrollportRef}
-    >
-      {fileDiffs.map((fileDiff) => (
-        <FileDiffCard
-          fileDiff={fileDiff}
-          isCollapsed={isPathCollapsed(fileDiff.name)}
-          isHighlighterReady={isHighlighterReady}
-          key={fileDiff.name}
-          onToggle={toggleCollapsed}
-        />
-      ))}
+    <div className="absolute inset-0" data-slot="file-diffs-scrollport">
+      {!isHighlighterReady && (
+        <div
+          aria-label="Loading diffs"
+          className="bg-background/80 absolute inset-0 z-10 space-y-3 overflow-y-auto p-4"
+        >
+          <Skeleton className="h-8 w-full" />
+          <Skeleton className="h-64 w-full" />
+          <Skeleton className="h-8 w-full" />
+        </div>
+      )}
+      <CodeView
+        className="h-full"
+        items={items}
+        options={codeViewOptions}
+        ref={codeViewRef}
+        renderAnnotation={renderAnnotation}
+        renderCustomHeader={renderCustomHeader}
+      />
+      {!complete && (
+        <p className="text-muted-foreground bg-background/90 pointer-events-none absolute inset-x-0 bottom-0 px-4 py-2 text-sm">
+          Loading more files… ({fileDiffs.length} loaded)
+        </p>
+      )}
     </div>
   );
 }

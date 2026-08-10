@@ -21,6 +21,13 @@ import {
 } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
+import {
+  chunkItems,
+  diffBatchSize,
+  joinPatchFragments,
+} from "@/lib/diff-batches";
+import type { DiffBatch } from "@/lib/diff-batches";
+
 const maximumRetryDelay = Duration.seconds(5);
 
 /**
@@ -47,11 +54,7 @@ const untrackedDiffConcurrency = 8;
 
 const gitCommandTimeout = Duration.seconds(30);
 
-const joinPatches = (patches: readonly string[]) =>
-  patches
-    .filter((patch) => patch.length > 0)
-    .map((patch) => (patch.endsWith("\n") ? patch : `${patch}\n`))
-    .join("");
+const joinPatches = joinPatchFragments;
 
 const watcherRetrySchedule = Schedule.exponential("100 millis").pipe(
   Schedule.jittered,
@@ -749,49 +752,119 @@ const make = (workingDirectory?: string) =>
         )
     );
 
-    const unstagedDiff = Effect.fn("lazydiff/services/git/unstagedDiff")(() =>
-      Effect.gen(function* () {
-        const [trackedPatch, entries] = yield* Effect.all(
-          [run(["diff", "--find-renames", "--"]), unstagedStatuses()],
-          { concurrency: "unbounded" }
-        );
-        // Untracked files have no index entry to diff against, so each one is
-        // compared with an empty file instead.
-        const untrackedPatches = yield* Effect.all(
-          entries
-            .filter(({ status }) => status === "untracked")
-            .map(({ path: filePath }) =>
-              run(["diff", "--no-index", "--", nullDevice, filePath])
-            ),
-          { concurrency: untrackedDiffConcurrency }
-        );
-
-        return joinPatches([trackedPatch, ...untrackedPatches]);
-      })
-    );
-
-    /** Resolves the unified patch covering every changed file in the scope. */
-    const scopeDiff = Effect.fn("lazydiff/services/git/scopeDiff")((
+    const diffEntryBatch = Effect.fn("lazydiff/services/git/diffEntryBatch")((
       scope: GitChangeScope,
+      entries: readonly GitStatusEntry[],
       branch?: string
     ) => {
-      if (scope === "unstaged") {
-        return unstagedDiff();
+      if (entries.length === 0) {
+        return Effect.succeed("");
       }
 
+      if (scope === "unstaged") {
+        const trackedPaths = entries
+          .filter(({ status }) => status !== "untracked")
+          .map(({ path: filePath }) => filePath);
+        const untrackedPaths = entries
+          .filter(({ status }) => status === "untracked")
+          .map(({ path: filePath }) => filePath);
+
+        return Effect.gen(function* () {
+          const trackedPatch =
+            trackedPaths.length === 0
+              ? ""
+              : yield* run(["diff", "--find-renames", "--", ...trackedPaths]);
+          // Untracked files have no index entry to diff against, so each one is
+          // compared with an empty file instead.
+          const untrackedPatches = yield* Effect.all(
+            untrackedPaths.map((filePath) =>
+              run(["diff", "--no-index", "--", nullDevice, filePath])
+            ),
+            { concurrency: untrackedDiffConcurrency }
+          );
+
+          return joinPatches([trackedPatch, ...untrackedPatches]);
+        });
+      }
+
+      const paths = entries.map(({ path: filePath }) => filePath);
+
       if (scope === "staged") {
-        return run(["diff", "--cached", "--find-renames", "--"]).pipe(
+        return run(["diff", "--cached", "--find-renames", "--", ...paths]).pipe(
           Effect.map((patch) => joinPatches([patch]))
         );
       }
 
       return resolveComparisonBase(branch).pipe(
         Effect.flatMap((comparisonBase) =>
-          run(["diff", "--find-renames", comparisonBase, "HEAD", "--"])
+          run([
+            "diff",
+            "--find-renames",
+            comparisonBase,
+            "HEAD",
+            "--",
+            ...paths,
+          ])
         ),
         Effect.map((patch) => joinPatches([patch]))
       );
     });
+
+    /**
+     * Streams unified patch batches (first {@link diffBatchSize} files, then
+     * the rest) so clients can render progressively.
+     */
+    const scopeDiffBatches = (
+      scope: GitChangeScope,
+      branch?: string
+    ): Stream.Stream<DiffBatch, Error> =>
+      Stream.unwrap(
+        fileStatuses(scope, branch).pipe(
+          Effect.map((entries) => {
+            if (entries.length === 0) {
+              return Stream.succeed<DiffBatch>({
+                complete: true,
+                patch: "",
+                reset: true,
+              });
+            }
+
+            const batches = chunkItems(entries, diffBatchSize);
+
+            return Stream.fromIterable(
+              batches.map((batch, index) => ({
+                batch,
+                complete: index === batches.length - 1,
+                reset: index === 0,
+              }))
+            ).pipe(
+              Stream.mapEffect(({ batch, complete, reset }) =>
+                diffEntryBatch(scope, batch, branch).pipe(
+                  Effect.map(
+                    (patch): DiffBatch => ({
+                      complete,
+                      patch,
+                      reset,
+                    })
+                  )
+                )
+              )
+            );
+          })
+        )
+      );
+
+    /** Resolves the unified patch covering every changed file in the scope. */
+    const scopeDiff = Effect.fn("lazydiff/services/git/scopeDiff")(
+      (scope: GitChangeScope, branch?: string) =>
+        scopeDiffBatches(scope, branch).pipe(
+          Stream.runFold(
+            () => "",
+            (patch, batch) =>
+              batch.reset ? batch.patch : joinPatches([patch, batch.patch])
+          )
+        )
+    );
 
     const gitDirectory = yield* run(["rev-parse", "--absolute-git-dir"]).pipe(
       Effect.map((output) => output.trim())
@@ -835,6 +908,7 @@ const make = (workingDirectory?: string) =>
       repositoryName,
       reviewSource,
       scopeDiff,
+      scopeDiffBatches,
       switchBranch,
     };
   });

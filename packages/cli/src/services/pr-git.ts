@@ -7,6 +7,8 @@ import type {
 } from "@lazydiff/protocol";
 import { Effect, Layer, Stream, SubscriptionRef } from "effect";
 
+import { splitUnifiedPatch, toDiffBatches } from "@/lib/diff-batches";
+import type { DiffBatch } from "@/lib/diff-batches";
 import { Git } from "@/services/git";
 import type { PullRequestReview } from "@/services/vcs";
 
@@ -28,6 +30,8 @@ const make = (pullRequest: PullRequestReview) =>
     const branchState = yield* SubscriptionRef.make(head);
     const committedEntries: GitStatusEntry[] = [...pullRequest.entries];
     const committedFiles: string[] = committedEntries.map(({ path }) => path);
+    const committedFilePatches = splitUnifiedPatch(pullRequest.patch);
+    const committedDiffBatches = toDiffBatches(committedFilePatches);
     const branches: GitBranch[] = [
       {
         current: true,
@@ -78,6 +82,21 @@ const make = (pullRequest: PullRequestReview) =>
         forCommittedScope(scope, pullRequest.patch, "")
     );
 
+    const scopeDiffBatches = (
+      scope: GitChangeScope,
+      _branch?: string
+    ): Stream.Stream<DiffBatch> => {
+      if (scope !== "committed") {
+        return Stream.succeed({
+          complete: true,
+          patch: "",
+          reset: true,
+        });
+      }
+
+      return Stream.fromIterable(committedDiffBatches);
+    };
+
     const switchBranch = Effect.fn("lazydiff/services/prGit/switchBranch")(
       (_name: string) => Effect.fail(prMutationError("switch branches"))
     );
@@ -96,6 +115,7 @@ const make = (pullRequest: PullRequestReview) =>
       repositoryName: `${pullRequest.owner}/${pullRequest.repo}#${pullRequest.number}`,
       reviewSource,
       scopeDiff,
+      scopeDiffBatches,
       switchBranch,
     };
   });

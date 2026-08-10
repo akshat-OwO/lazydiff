@@ -91,11 +91,18 @@ const GitRpcHandlersLive = LazyDiffRpcs.toLayer(
           Stream.make("initial" as const),
           git.repositoryChanges
         ).pipe(
-          Stream.mapEffect(() => git.scopeDiff(data.scope, data.branch)),
-          Stream.map((patch) => ({
-            data: { patch },
-            type: "git.diff.result" as const,
-          })),
+          Stream.switchMap(() =>
+            git.scopeDiffBatches(data.scope, data.branch).pipe(
+              Stream.map((batch) => ({
+                data: {
+                  complete: batch.complete,
+                  patch: batch.patch,
+                  reset: batch.reset,
+                },
+                type: "git.diff.result" as const,
+              }))
+            )
+          ),
           Stream.mapError(toGitDiffError)
         ),
       "git.repository.get": () =>

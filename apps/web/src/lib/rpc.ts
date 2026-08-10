@@ -148,6 +148,16 @@ export const gitChangeScopeAutoSelectAtom = LazyDiffRpcClient.runtime.atom(
     })
 );
 
+const joinPatchFragments = (patches: readonly string[]) =>
+  patches
+    .filter((patch) => patch.length > 0)
+    .map((patch) => (patch.endsWith("\n") ? patch : `${patch}\n`))
+    .join("");
+
+/**
+ * Accumulates streamed diff batches into a cumulative patch. Atom stream atoms
+ * only retain the latest emission, so mapAccum keeps that latest value complete.
+ */
 export const gitDiffAtom = LazyDiffRpcClient.runtime.atom((get) =>
   Stream.unwrap(
     Effect.gen(function* subscribeToGitDiff() {
@@ -155,7 +165,30 @@ export const gitDiffAtom = LazyDiffRpcClient.runtime.atom((get) =>
       return client("git.diff.subscribe", {
         data: { scope: get(gitChangeScopeAtom) },
         type: "git.diff.subscribe",
-      });
+      }).pipe(
+        Stream.mapAccum(
+          () => ({ patch: "" }),
+          (state, message) => {
+            const patch = message.data.reset
+              ? message.data.patch
+              : joinPatchFragments([state.patch, message.data.patch]);
+
+            return [
+              { patch },
+              [
+                {
+                  data: {
+                    complete: message.data.complete,
+                    patch,
+                    reset: message.data.reset,
+                  },
+                  type: "git.diff.result" as const,
+                },
+              ],
+            ] as const;
+          }
+        )
+      );
     })
   ).pipe(Stream.retry(rpcRetrySchedule))
 );
