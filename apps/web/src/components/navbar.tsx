@@ -204,7 +204,6 @@ function PrReviewSessionToggle() {
         size="xs"
         title="Stop persisting annotations for this pull request"
         type="button"
-        variant="secondary"
       >
         <SquareIcon data-icon="inline-start" />
         End review
