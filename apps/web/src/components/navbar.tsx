@@ -91,8 +91,24 @@ function GitBranchButton() {
 }
 
 function GitChangeScopeSelect() {
+  const repository = useAtomValue(gitRepositoryAtom);
   const [scope, setScope] = useAtom(gitChangeScopeAtom);
   const setDraft = useAtomSet(annotationDraftAtom);
+
+  if (repository._tag === "Initial") {
+    return (
+      <output aria-label="Loading change scope">
+        <Skeleton className="h-6 w-24" />
+      </output>
+    );
+  }
+
+  if (
+    repository._tag === "Success" &&
+    repository.value.data.source === "pull-request"
+  ) {
+    return null;
+  }
 
   return (
     <Select

@@ -82,10 +82,26 @@ export const gitStatusAtom = LazyDiffRpcClient.runtime.atom((get) =>
 /**
  * When the selected scope has no changes, switch to the first preferred scope
  * that does (unstaged → staged → committed).
+ *
+ * Pull request reviews only expose committed changes, so force that scope.
  */
 export const gitChangeScopeAutoSelectAtom = LazyDiffRpcClient.runtime.atom(
   (get) =>
     Effect.gen(function* autoSelectGitChangeScope() {
+      const repository = get(gitRepositoryAtom);
+
+      if (
+        repository._tag === "Success" &&
+        repository.value.data.source === "pull-request"
+      ) {
+        if (get(gitChangeScopeAtom) !== "committed") {
+          get.set(annotationDraftAtom, null);
+          get.set(gitChangeScopeAtom, "committed");
+        }
+
+        return;
+      }
+
       const status = get(gitStatusAtom);
 
       if (status._tag !== "Success" || status.value.data.entries.length > 0) {
