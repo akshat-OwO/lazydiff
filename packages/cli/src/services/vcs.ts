@@ -2,9 +2,9 @@ import type { GitStatusEntry } from "@lazydiff/protocol";
 import { Context } from "effect";
 import type { Effect } from "effect";
 
-import type { VcsError } from "@/services/vcs-error";
+import type { VcsError } from "@/schemas/errors/vcs-error";
 
-export { VcsError } from "@/services/vcs-error";
+export { VcsError } from "@/schemas/errors/vcs-error";
 
 export interface PullRequestRef {
   readonly host: "github.com";

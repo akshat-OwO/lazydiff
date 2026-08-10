@@ -2,44 +2,48 @@ import { deepStrictEqual, strictEqual } from "node:assert";
 import { test } from "node:test";
 
 import { NodeServices } from "@effect/platform-node";
-import { Effect, Option, Redacted } from "effect";
+import { ConfigProvider, Effect, Layer, Option, Redacted } from "effect";
 
-import { resolveGithubToken } from "../../src/services/github-auth.ts";
+import { GithubAuth, GithubAuthLive } from "../../src/services/github-auth.ts";
 
-test("resolveGithubToken prefers GITHUB_TOKEN over gh auth", async () => {
-  const previous = process.env.GITHUB_TOKEN;
-  process.env.GITHUB_TOKEN = "env-test-token";
+const makeGithubAuthTestLive = (env: Record<string, string>) =>
+  GithubAuthLive.pipe(
+    Layer.provide(NodeServices.layer),
+    Layer.provideMerge(ConfigProvider.layer(ConfigProvider.fromEnv({ env })))
+  );
 
-  try {
-    const token = await resolveGithubToken().pipe(
-      Effect.provide(NodeServices.layer),
-      Effect.runPromise
-    );
+test("GithubAuth prefers GITHUB_TOKEN over gh auth", async () => {
+  const token = await Effect.gen(function* () {
+    const githubAuth = yield* GithubAuth;
+    return yield* githubAuth.resolveToken();
+  }).pipe(
+    Effect.provide(
+      makeGithubAuthTestLive({
+        GITHUB_TOKEN: "env-test-token",
+      })
+    ),
+    Effect.runPromise
+  );
 
-    strictEqual(Option.isSome(token), true);
-    if (Option.isSome(token)) {
-      strictEqual(Redacted.value(token.value), "env-test-token");
-    }
-  } finally {
-    if (previous === undefined) {
-      delete process.env.GITHUB_TOKEN;
-    } else {
-      process.env.GITHUB_TOKEN = previous;
-    }
+  strictEqual(Option.isSome(token), true);
+  if (Option.isSome(token)) {
+    strictEqual(Redacted.value(token.value), "env-test-token");
   }
 });
 
-test("resolveGithubToken returns none when env is empty and gh is unavailable", async () => {
+test("GithubAuth returns none when env is empty and gh is unavailable", async () => {
   const previousToken = process.env.GITHUB_TOKEN;
   const previousGhConfig = process.env.GH_CONFIG_DIR;
+  const previousGhToken = process.env.GH_TOKEN;
   delete process.env.GITHUB_TOKEN;
+  delete process.env.GH_TOKEN;
   process.env.GH_CONFIG_DIR = "/tmp/lazydiff-empty-gh-config";
 
   try {
-    const token = await resolveGithubToken().pipe(
-      Effect.provide(NodeServices.layer),
-      Effect.runPromise
-    );
+    const token = await Effect.gen(function* () {
+      const githubAuth = yield* GithubAuth;
+      return yield* githubAuth.resolveToken();
+    }).pipe(Effect.provide(makeGithubAuthTestLive({})), Effect.runPromise);
 
     deepStrictEqual(token, Option.none());
   } finally {
@@ -47,6 +51,12 @@ test("resolveGithubToken returns none when env is empty and gh is unavailable", 
       delete process.env.GITHUB_TOKEN;
     } else {
       process.env.GITHUB_TOKEN = previousToken;
+    }
+
+    if (previousGhToken === undefined) {
+      delete process.env.GH_TOKEN;
+    } else {
+      process.env.GH_TOKEN = previousGhToken;
     }
 
     if (previousGhConfig === undefined) {

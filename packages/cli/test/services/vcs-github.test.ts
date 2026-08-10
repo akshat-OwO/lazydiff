@@ -5,10 +5,16 @@ import { NodeServices } from "@effect/platform-node";
 import { Effect, Layer } from "effect";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 
+import { GithubAuthLive } from "../../src/services/github-auth.ts";
 import { GithubLive } from "../../src/services/vcs-github.ts";
 import { VCSService } from "../../src/services/vcs.ts";
 
+const GithubAuthTestLive = GithubAuthLive.pipe(
+  Layer.provide(NodeServices.layer)
+);
+
 const GithubTestLive = GithubLive.pipe(
+  Layer.provide(GithubAuthTestLive),
   Layer.provide(FetchHttpClient.layer),
   Layer.provide(NodeServices.layer)
 );

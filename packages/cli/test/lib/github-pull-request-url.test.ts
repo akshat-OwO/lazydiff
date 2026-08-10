@@ -6,7 +6,7 @@ import { Option } from "effect";
 import {
   formatGithubPullRequestUrl,
   parseGithubPullRequestUrl,
-} from "../../src/services/github-pull-request-url.ts";
+} from "../../src/lib/github-pull-request-url.ts";
 
 test("parseGithubPullRequestUrl accepts canonical GitHub pull request URLs", () => {
   deepStrictEqual(

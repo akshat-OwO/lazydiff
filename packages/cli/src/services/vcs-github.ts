@@ -3,13 +3,12 @@ import { Effect, Layer, Option, Schedule, Schema } from "effect";
 import type { Redacted } from "effect";
 import type { HttpClientResponse } from "effect/unstable/http";
 import { Headers, HttpClient, HttpClientRequest } from "effect/unstable/http";
-import { ChildProcessSpawner } from "effect/unstable/process";
 
-import { resolveGithubToken } from "@/services/github-auth";
 import {
   formatGithubPullRequestUrl,
   parseGithubPullRequestUrl,
-} from "@/services/github-pull-request-url";
+} from "@/lib/github-pull-request-url";
+import { GithubAuth } from "@/services/github-auth";
 import { VCSService, VcsError } from "@/services/vcs";
 import type { PullRequestRef, PullRequestReview } from "@/services/vcs";
 
@@ -324,7 +323,7 @@ const fetchPullRequestDiff = (
 
 const make = Effect.gen(function* () {
   const httpClient = yield* HttpClient.HttpClient;
-  const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const githubAuth = yield* GithubAuth;
 
   const fetchPullRequest = Effect.fn(
     "lazydiff/services/vcsGithub/fetchPullRequest"
@@ -341,12 +340,7 @@ const make = Effect.gen(function* () {
         onSome: Effect.succeed,
       })
     );
-    const token = yield* resolveGithubToken().pipe(
-      Effect.provideService(
-        ChildProcessSpawner.ChildProcessSpawner,
-        childProcessSpawner
-      )
-    );
+    const token = yield* githubAuth.resolveToken();
     const client = makeAuthedClient(httpClient, token);
     const hasToken = Option.isSome(token);
     const [metadata, files, patch] = yield* Effect.all(
