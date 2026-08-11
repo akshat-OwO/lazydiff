@@ -511,3 +511,62 @@ test("setPullRequestReviewThreadResolved fails when unresolving a missing Bitbuc
   strictEqual(error._tag, "VcsError");
   strictEqual(error.reason, "NotFound");
 });
+
+test("setPullRequestReviewThreadResolved fails when unresolving a deleted Bitbucket comment", async () => {
+  let resolveDeletes = 0;
+  let commentGets = 0;
+
+  const FakeHttpLive = Layer.succeed(
+    HttpClient.HttpClient,
+    makeRecordingHttpClient((request) => {
+      if (request.method === "DELETE" && request.url.endsWith("/resolve")) {
+        resolveDeletes += 1;
+        return Response.json(
+          {
+            error: {
+              message:
+                "No PullRequestCommentResolution matches the given query.",
+            },
+            type: "error",
+          },
+          { status: 404 }
+        );
+      }
+
+      if (request.method === "GET" && request.url.endsWith("/comments/11")) {
+        commentGets += 1;
+        return Response.json({
+          content: { raw: "deleted thread" },
+          created_on: "2026-08-10T00:00:00.000000+00:00",
+          deleted: true,
+          id: 11,
+          resolution: null,
+        });
+      }
+
+      return new Response("unused", { status: 500 });
+    })
+  );
+
+  const error = await Effect.gen(function* () {
+    const vcs = yield* VCSService;
+    return yield* vcs
+      .setPullRequestReviewThreadResolved(pullRequestRef, "11", false)
+      .pipe(Effect.flip);
+  }).pipe(
+    Effect.provide(provideBitbucket(FakeHttpLive)),
+    Effect.provide(
+      bitbucketAuthConfig({
+        BITBUCKET_EMAIL: "dev@example.com",
+        BITBUCKET_TOKEN: "test-token",
+      })
+    ),
+    Effect.runPromise
+  );
+
+  strictEqual(resolveDeletes, 1);
+  strictEqual(commentGets, 1);
+  strictEqual(error._tag, "VcsError");
+  strictEqual(error.reason, "NotFound");
+  match(error.message, /deleted/iu);
+});

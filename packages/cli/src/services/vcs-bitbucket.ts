@@ -160,6 +160,11 @@ const BitbucketCommentResolutionResult = Schema.Struct({
   type: Schema.optionalKey(Schema.String),
 });
 
+const BitbucketCommentExistence = Schema.Struct({
+  deleted: Schema.optionalKey(Schema.Boolean),
+  id: Schema.Number,
+});
+
 const decodePullRequest = Schema.decodeEffect(
   Schema.toCodecJson(BitbucketPullRequest)
 );
@@ -177,6 +182,9 @@ const decodeCreatedComment = Schema.decodeEffect(
 );
 const decodeCommentResolution = Schema.decodeEffect(
   Schema.toCodecJson(BitbucketCommentResolutionResult)
+);
+const decodeCommentExistence = Schema.decodeEffect(
+  Schema.toCodecJson(BitbucketCommentExistence)
 );
 
 const authenticationHelp =
@@ -1190,18 +1198,45 @@ export const makeBitbucketVcs = Effect.gen(function* () {
     }
 
     // 404 can mean either "already open" or "comment does not exist". Confirm
-    // the comment is still present before treating this as idempotent success.
+    // an active (non-deleted) comment before treating this as idempotent success.
     const response = yield* deleteOk(client, true, ref, resolveUrl, "comment", {
       acceptStatuses: new Set([404]),
     });
 
     if (response.status === 404) {
-      yield* getOkResponse(
+      const detailResponse = yield* getOkResponse(
         client,
         true,
         ref,
         `${apiPullRequestPath(ref)}/comments/${commentId}`
       );
+      const detailJson = yield* detailResponse.json.pipe(
+        Effect.mapError(
+          (error) =>
+            new VcsError({
+              message: `Unable to read Bitbucket comment ${commentId} for ${pullRequestUrl}: ${error.message}`,
+              reason: "DecodeError",
+            })
+        )
+      );
+      const detail = yield* decodeCommentExistence(detailJson).pipe(
+        Effect.mapError(
+          (error) =>
+            new VcsError({
+              message: `Unable to decode Bitbucket comment ${commentId} for ${pullRequestUrl}: ${error.message}`,
+              reason: "DecodeError",
+            })
+        )
+      );
+
+      if (detail.deleted === true) {
+        return yield* Effect.fail(
+          new VcsError({
+            message: `Bitbucket comment ${commentId} was deleted on ${pullRequestUrl}.`,
+            reason: "NotFound",
+          })
+        );
+      }
     }
 
     return { isResolved: false };
