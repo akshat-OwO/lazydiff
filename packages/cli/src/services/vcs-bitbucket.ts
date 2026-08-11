@@ -5,11 +5,12 @@ import type {
   GitFileStatus,
   GitStatusEntry,
 } from "@lazydiff/protocol";
-import { Effect, Layer, Option, Schedule, Schema } from "effect";
+import { Effect, Layer, Option, Schedule, Schema, Stream } from "effect";
 import type { HttpClientResponse } from "effect/unstable/http";
 import { HttpClient, HttpClientRequest } from "effect/unstable/http";
 
-import { resolveBitbucketCredentials } from "@/services/bitbucket-auth";
+import { buildBitbucketPullRequestFileBatches } from "@/lib/bitbucket-pull-request-batches";
+import { BitbucketAuth } from "@/services/bitbucket-auth";
 import type { BitbucketCredentials } from "@/services/bitbucket-auth";
 import {
   formatBitbucketPullRequestUrl,
@@ -17,8 +18,9 @@ import {
 } from "@/services/bitbucket-pull-request-url";
 import { VCSService, VcsError } from "@/services/vcs";
 import type {
+  PullRequestFileBatch,
   PullRequestRef,
-  PullRequestReview,
+  PullRequestSession,
   VCSServiceShape,
 } from "@/services/vcs";
 
@@ -755,9 +757,10 @@ const inlineBodyForComment = (comment: GithubPrReviewCommentInput) => {
 
 export const makeBitbucketVcs = Effect.gen(function* () {
   const httpClient = yield* HttpClient.HttpClient;
+  const bitbucketAuth = yield* BitbucketAuth;
 
-  const fetchPullRequest = Effect.fn(
-    "lazydiff/services/vcsBitbucket/fetchPullRequest"
+  const openPullRequest = Effect.fn(
+    "lazydiff/services/vcsBitbucket/openPullRequest"
   )(function* (url: string) {
     const ref = yield* parseBitbucketPullRequestUrl(url).pipe(
       Option.match({
@@ -771,16 +774,13 @@ export const makeBitbucketVcs = Effect.gen(function* () {
         onSome: Effect.succeed,
       })
     );
-    const credentials = yield* resolveBitbucketCredentials();
+    const credentials = yield* bitbucketAuth.resolveCredentials();
     const client = makeAuthedClient(httpClient, credentials);
     const hasCredentials = Option.isSome(credentials);
-    const [metadata, diffstat, patch] = yield* Effect.all(
-      [
-        fetchPullRequestMetadata(client, hasCredentials, ref),
-        fetchPullRequestDiffstat(client, hasCredentials, ref),
-        fetchPullRequestDiff(client, hasCredentials, ref),
-      ],
-      { concurrency: "unbounded" }
+    const metadata = yield* fetchPullRequestMetadata(
+      client,
+      hasCredentials,
+      ref
     );
     const headSha = yield* fetchFullCommitHash(
       client,
@@ -788,22 +788,41 @@ export const makeBitbucketVcs = Effect.gen(function* () {
       ref,
       metadata.source.commit
     );
+    const pullRequestUrl = formatBitbucketPullRequestUrl(ref);
 
-    const review: PullRequestReview = {
+    // Diffstat + unified patch load when the session stream is consumed so
+    // review metadata can be served immediately.
+    const fileBatches: Stream.Stream<PullRequestFileBatch, VcsError> =
+      Stream.unwrap(
+        Effect.gen(function* () {
+          const [diffstat, patch] = yield* Effect.all(
+            [
+              fetchPullRequestDiffstat(client, hasCredentials, ref),
+              fetchPullRequestDiff(client, hasCredentials, ref),
+            ],
+            { concurrency: "unbounded" }
+          );
+
+          return Stream.fromIterable(
+            buildBitbucketPullRequestFileBatches(mapDiffstat(diffstat), patch)
+          );
+        })
+      );
+
+    const session: PullRequestSession = {
       baseRefName: metadata.destination.branch.name,
-      entries: mapDiffstat(diffstat),
+      fileBatches,
       headRefName: metadata.source.branch.name,
       headSha,
       host: "bitbucket.org",
       number: metadata.id,
       owner: ref.owner,
-      patch,
       repo: ref.repo,
       title: metadata.title,
-      url: formatBitbucketPullRequestUrl(ref),
+      url: pullRequestUrl,
     };
 
-    return review;
+    return session;
   });
 
   const createPullRequestReview = Effect.fn(
@@ -815,7 +834,7 @@ export const makeBitbucketVcs = Effect.gen(function* () {
   ) {
     yield* requireBitbucketRef(ref);
     const pullRequestUrl = formatBitbucketPullRequestUrl(ref);
-    const credentials = yield* resolveBitbucketCredentials();
+    const credentials = yield* bitbucketAuth.resolveCredentials();
     yield* requireCredentials(credentials, ref, "comment on");
     const client = makeAuthedClient(httpClient, credentials);
     let firstCommentHtmlUrl: string | undefined;
@@ -862,7 +881,7 @@ export const makeBitbucketVcs = Effect.gen(function* () {
     "lazydiff/services/vcsBitbucket/listPullRequestReviewThreads"
   )(function* (ref: PullRequestRef) {
     yield* requireBitbucketRef(ref);
-    const credentials = yield* resolveBitbucketCredentials();
+    const credentials = yield* bitbucketAuth.resolveCredentials();
     yield* requireCredentials(credentials, ref, "read review comments on");
     const client = makeAuthedClient(httpClient, credentials);
     const comments = yield* fetchAllComments(client, true, ref);
@@ -924,7 +943,7 @@ export const makeBitbucketVcs = Effect.gen(function* () {
   )(function* (ref: PullRequestRef, commentId: number, body: string) {
     yield* requireBitbucketRef(ref);
     const pullRequestUrl = formatBitbucketPullRequestUrl(ref);
-    const credentials = yield* resolveBitbucketCredentials();
+    const credentials = yield* bitbucketAuth.resolveCredentials();
     yield* requireCredentials(credentials, ref, "reply on");
     const client = makeAuthedClient(httpClient, credentials);
     const response = yield* postJson(
@@ -982,7 +1001,7 @@ export const makeBitbucketVcs = Effect.gen(function* () {
       );
     }
 
-    const credentials = yield* resolveBitbucketCredentials();
+    const credentials = yield* bitbucketAuth.resolveCredentials();
     yield* requireCredentials(credentials, ref, "update review threads on");
     const client = makeAuthedClient(httpClient, credentials);
     const resolveUrl = `${apiPullRequestPath(ref)}/comments/${commentId}/resolve`;
@@ -1026,8 +1045,8 @@ export const makeBitbucketVcs = Effect.gen(function* () {
 
   return {
     createPullRequestReview,
-    fetchPullRequest,
     listPullRequestReviewThreads,
+    openPullRequest,
     replyToPullRequestReviewComment,
     setPullRequestReviewThreadResolved,
   } satisfies VCSServiceShape;

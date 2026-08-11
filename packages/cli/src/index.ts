@@ -6,6 +6,7 @@ import { Command } from "effect/unstable/cli";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 
 import { commands } from "@/cmds/index";
+import { BitbucketAuthLive } from "@/services/bitbucket-auth";
 import { GithubAuthLive } from "@/services/github-auth";
 import { HttpServerConnectionsLive } from "@/services/http-server-connections";
 import { VcsLive } from "@/services/vcs-live";
@@ -19,8 +20,10 @@ const AppLive = Layer.mergeAll(
   NodeServices.layer,
   FetchHttpClient.layer,
   GithubAuthLayer,
+  BitbucketAuthLive,
   VcsLive.pipe(
     Layer.provide(GithubAuthLayer),
+    Layer.provide(BitbucketAuthLive),
     Layer.provide(FetchHttpClient.layer),
     Layer.provide(NodeServices.layer)
   ),

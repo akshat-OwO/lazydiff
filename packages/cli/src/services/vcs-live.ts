@@ -1,8 +1,8 @@
 import { Effect, Layer, Option } from "effect";
 
-import { parseBitbucketPullRequestUrl } from "@/services/bitbucket-pull-request-url";
 import { parseGithubPullRequestUrl } from "@/lib/github-pull-request-url";
-import type { VCSServiceShape, PullRequestRef } from "@/services/vcs";
+import { parseBitbucketPullRequestUrl } from "@/services/bitbucket-pull-request-url";
+import type { PullRequestRef, VCSServiceShape } from "@/services/vcs";
 import { VCSService, VcsError } from "@/services/vcs";
 import { makeBitbucketVcs } from "@/services/vcs-bitbucket";
 import { makeGithubVcs } from "@/services/vcs-github";
@@ -36,19 +36,19 @@ export const makeVcs = Effect.gen(function* () {
         commitId,
         comments
       ),
-    fetchPullRequest: (url) => {
+    listPullRequestReviewThreads: (ref) =>
+      providerForRef(ref, github, bitbucket).listPullRequestReviewThreads(ref),
+    openPullRequest: (url) => {
       if (Option.isSome(parseBitbucketPullRequestUrl(url))) {
-        return bitbucket.fetchPullRequest(url);
+        return bitbucket.openPullRequest(url);
       }
 
       if (Option.isSome(parseGithubPullRequestUrl(url))) {
-        return github.fetchPullRequest(url);
+        return github.openPullRequest(url);
       }
 
       return Effect.fail(unsupportedPullRequestUrl(url));
     },
-    listPullRequestReviewThreads: (ref) =>
-      providerForRef(ref, github, bitbucket).listPullRequestReviewThreads(ref),
     replyToPullRequestReviewComment: (ref, commentId, body) =>
       providerForRef(ref, github, bitbucket).replyToPullRequestReviewComment(
         ref,
