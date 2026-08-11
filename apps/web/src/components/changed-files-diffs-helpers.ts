@@ -219,8 +219,14 @@ const gutterUtilityCSS = `
 interface CachedCodeViewItem {
   readonly annotations: DiffLineAnnotation<AnnotationMetadata>[] | undefined;
   readonly collapsed: boolean;
+  /** Caller-supplied collapse counter from the diffs hook. */
+  readonly collapseVersion: number;
   readonly item: CodeViewDiffItem<AnnotationMetadata>;
-  readonly version: number;
+  /**
+   * Version published to CodeView. Pierre only applies controlled item updates
+   * when this advances, including annotation attachment changes.
+   */
+  readonly publishedVersion: number;
 }
 
 /**
@@ -230,11 +236,17 @@ interface CachedCodeViewItem {
  */
 const codeViewItems = new WeakMap<FileDiffMetadata, CachedCodeViewItem>();
 
+/**
+ * Builds a stable CodeView item for a file diff. Annotation and collapse
+ * changes bump `publishedVersion` so CodeView's controlled reconcile path
+ * picks up draft/saved/remote line annotations (same-version updates are
+ * ignored by Pierre).
+ */
 const resolveCodeViewItem = (
   fileDiff: FileDiffMetadata,
   collapsed: boolean,
   annotations: DiffLineAnnotation<AnnotationMetadata>[] | undefined,
-  version: number
+  collapseVersion: number
 ): CodeViewDiffItem<AnnotationMetadata> => {
   const cached = codeViewItems.get(fileDiff);
 
@@ -242,21 +254,30 @@ const resolveCodeViewItem = (
     cached !== undefined &&
     cached.collapsed === collapsed &&
     cached.annotations === annotations &&
-    cached.version === version
+    cached.collapseVersion === collapseVersion
   ) {
     return cached.item;
   }
+
+  const publishedVersion =
+    cached === undefined ? collapseVersion : cached.publishedVersion + 1;
 
   const item: CodeViewDiffItem<AnnotationMetadata> = {
     collapsed,
     fileDiff,
     id: fileDiffAnchorId(fileDiff.name),
     type: "diff",
-    version,
+    version: publishedVersion,
     ...(annotations === undefined ? {} : { annotations }),
   };
 
-  codeViewItems.set(fileDiff, { annotations, collapsed, item, version });
+  codeViewItems.set(fileDiff, {
+    annotations,
+    collapseVersion,
+    collapsed,
+    item,
+    publishedVersion,
+  });
 
   return item;
 };

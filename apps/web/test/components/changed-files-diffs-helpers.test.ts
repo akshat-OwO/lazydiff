@@ -12,6 +12,7 @@ import {
   remoteThreadLineAnnotation,
   remoteThreadsForFilePath,
   resolveAnnotationRenderTarget,
+  resolveCodeViewItem,
 } from "../../src/components/changed-files-diffs-helpers.ts";
 
 const parseSingleFile = (patch: string): FileDiffMetadata => {
@@ -145,4 +146,41 @@ test("use-changed-files-diffs wires remote threads into CodeView rendering", () 
   match(source, /resolveAnnotationRenderTarget/u);
   match(source, /RemoteReviewThread/u);
   match(source, /target\._tag === "remote"/u);
+});
+
+test("resolveCodeViewItem advances version when line annotations change", () => {
+  const fileDiff = parseSingleFile(textPatch);
+  const withoutAnnotations = resolveCodeViewItem(fileDiff, false, undefined, 0);
+  const draftAnnotations = [
+    {
+      lineNumber: 2,
+      metadata: { kind: "draft" as const },
+      side: "additions" as const,
+    },
+  ];
+  const withDraft = resolveCodeViewItem(fileDiff, false, draftAnnotations, 0);
+  const withDraftAgain = resolveCodeViewItem(
+    fileDiff,
+    false,
+    draftAnnotations,
+    0
+  );
+
+  strictEqual(withoutAnnotations.version, 0);
+  strictEqual(withDraft.annotations, draftAnnotations);
+  // Pierre types version as optional; assert concrete published values.
+  strictEqual(withDraft.version, 1);
+  strictEqual(withDraftAgain, withDraft);
+});
+
+test("resolveCodeViewItem advances version when collapse state changes", () => {
+  const fileDiff = parseSingleFile(textPatch);
+  const expanded = resolveCodeViewItem(fileDiff, false, undefined, 0);
+  const collapsed = resolveCodeViewItem(fileDiff, true, undefined, 0);
+  const collapsedForced = resolveCodeViewItem(fileDiff, true, undefined, 1);
+
+  strictEqual(expanded.version, 0);
+  strictEqual(collapsed.collapsed, true);
+  strictEqual(collapsed.version, 1);
+  strictEqual(collapsedForced.version, 2);
 });
