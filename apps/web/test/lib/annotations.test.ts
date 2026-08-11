@@ -12,7 +12,9 @@ import {
   annotationMatchesFileDiff,
   annotationsForScope,
   formatAnnotationsMarkdown,
+  markAnnotationsSent,
   removeAnnotation,
+  unsentAnnotations,
 } from "../../src/lib/annotations.ts";
 import type { DiffAnnotation } from "../../src/lib/annotations.ts";
 
@@ -215,6 +217,36 @@ test("removeAnnotation drops only the requested id", () => {
     removeAnnotation(annotations, "1").map(({ id }) => id),
     ["2"]
   );
+});
+
+test("unsentAnnotations skips ids already posted to the remote", () => {
+  const annotations: readonly DiffAnnotation[] = [
+    {
+      codeDiff: "+two",
+      comment: "first",
+      filePath: "a.txt",
+      id: "1",
+      range: { end: 2, side: "additions", start: 2 },
+      scope: "committed",
+    },
+    {
+      codeDiff: "+added",
+      comment: "second",
+      filePath: "a.txt",
+      id: "2",
+      range: { end: 4, side: "additions", start: 4 },
+      scope: "committed",
+    },
+  ];
+
+  deepStrictEqual(
+    unsentAnnotations(annotations, new Set(["1"])).map(({ id }) => id),
+    ["2"]
+  );
+  deepStrictEqual([...markAnnotationsSent(new Set(["1"]), ["2"])].toSorted(), [
+    "1",
+    "2",
+  ]);
 });
 
 test("extractDiffSnippet keeps a multi-line additions replacement range", () => {

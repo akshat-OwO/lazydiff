@@ -9,6 +9,10 @@ import {
 } from "@/services/listen-port";
 import { makePrGitLive } from "@/services/pr-git";
 import {
+  makePullRequestContextLive,
+  openedPullRequestFromSession,
+} from "@/services/pull-request-session";
+import {
   formatStartupOutput,
   shouldShowHttpLogs,
 } from "@/services/startup-output";
@@ -137,11 +141,22 @@ export const commands = Command.make(
       );
 
       return yield* runReviewServer({ noBrowser }).pipe(
-        Effect.provide(makePrGitLive(session))
+        Effect.provide(
+          Layer.merge(
+            makePrGitLive(session),
+            makePullRequestContextLive(
+              Option.some(openedPullRequestFromSession(session))
+            )
+          )
+        )
       );
     }
 
-    return yield* runReviewServer({ noBrowser }).pipe(Effect.provide(GitLive));
+    return yield* runReviewServer({ noBrowser }).pipe(
+      Effect.provide(
+        Layer.merge(GitLive, makePullRequestContextLive(Option.none()))
+      )
+    );
   })
 ).pipe(
   Command.withDescription(

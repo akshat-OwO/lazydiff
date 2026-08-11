@@ -5,11 +5,23 @@ import { GitBranchError } from "./git-branch-error.ts";
 import { GitDiffError } from "./git-diff-error.ts";
 import { GitChangedFilesError } from "./git-errors.ts";
 import { GitStatusError } from "./git-status-error.ts";
+import { GithubPrAnnotationsError } from "./github-pr-annotations-error.ts";
 
 export { GitBranchError } from "./git-branch-error.ts";
 export { GitDiffError } from "./git-diff-error.ts";
 export { GitChangedFilesError } from "./git-errors.ts";
 export { GitStatusError } from "./git-status-error.ts";
+export { GithubPrAnnotationsError } from "./github-pr-annotations-error.ts";
+export {
+  annotationRangeToGithubReviewComment,
+  githubSideToPierre,
+  pierreSideToGithub,
+} from "./github-review-comment.ts";
+export type {
+  AnnotationRangeForReview,
+  GithubReviewCommentInput,
+  PierreAnnotationSide,
+} from "./github-review-comment.ts";
 
 export const BrandId = Schema.Literals([
   "git.branch.create",
@@ -31,6 +43,14 @@ export const BrandId = Schema.Literals([
   "git.status.get",
   "git.status.result",
   "git.status.subscribe",
+  "github.pr.annotations.post",
+  "github.pr.annotations.posted",
+  "github.pr.review-comments.reply",
+  "github.pr.review-comments.replied",
+  "github.pr.review-threads.list",
+  "github.pr.review-threads.result",
+  "github.pr.review-threads.resolve",
+  "github.pr.review-threads.resolved",
 ]);
 
 export type BrandId = typeof BrandId.Type;
@@ -246,9 +266,20 @@ export const GitReviewSource = Schema.Literals([
 
 export type GitReviewSource = typeof GitReviewSource.Type;
 
+export const GitPullRequestMeta = Schema.Struct({
+  headSha: NonEmptyString,
+  number: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1)),
+  owner: NonEmptyString,
+  repo: NonEmptyString,
+  url: NonEmptyString,
+});
+
+export type GitPullRequestMeta = typeof GitPullRequestMeta.Type;
+
 export const GitRepositoryResult = Schema.Struct({
   data: Schema.Struct({
     name: NonEmptyString,
+    pullRequest: Schema.optionalKey(GitPullRequestMeta),
     source: GitReviewSource,
   }),
   type: Schema.Literal("git.repository.result"),
@@ -284,6 +315,129 @@ export const GitStatusResult = Schema.Struct({
 });
 
 export type GitStatusResult = typeof GitStatusResult.Type;
+
+export const GithubReviewCommentSide = Schema.Literals(["LEFT", "RIGHT"]);
+
+export type GithubReviewCommentSide = typeof GithubReviewCommentSide.Type;
+
+const PositiveLineNumber = Schema.Number.check(
+  Schema.isInt(),
+  Schema.isGreaterThanOrEqualTo(1)
+);
+
+export const GithubPrReviewCommentInput = Schema.Struct({
+  body: NonEmptyString,
+  line: PositiveLineNumber,
+  path: NonEmptyString,
+  side: GithubReviewCommentSide,
+  startLine: Schema.optionalKey(PositiveLineNumber),
+  startSide: Schema.optionalKey(GithubReviewCommentSide),
+});
+
+export type GithubPrReviewCommentInput = typeof GithubPrReviewCommentInput.Type;
+
+export const GithubPrAnnotationsPost = Schema.Struct({
+  data: Schema.Struct({
+    comments: Schema.Array(GithubPrReviewCommentInput).check(
+      Schema.isNonEmpty()
+    ),
+  }),
+  type: Schema.Literal("github.pr.annotations.post"),
+});
+
+export type GithubPrAnnotationsPost = typeof GithubPrAnnotationsPost.Type;
+
+export const GithubPrAnnotationsPosted = Schema.Struct({
+  data: Schema.Struct({
+    htmlUrl: NonEmptyString,
+  }),
+  type: Schema.Literal("github.pr.annotations.posted"),
+});
+
+export type GithubPrAnnotationsPosted = typeof GithubPrAnnotationsPosted.Type;
+
+export const GithubPrReviewComment = Schema.Struct({
+  authorLogin: NonEmptyString,
+  body: Schema.String,
+  createdAt: NonEmptyString,
+  databaseId: Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0)),
+  id: NonEmptyString,
+});
+
+export type GithubPrReviewComment = typeof GithubPrReviewComment.Type;
+
+export const GithubPrReviewThread = Schema.Struct({
+  comments: Schema.Array(GithubPrReviewComment).check(Schema.isNonEmpty()),
+  id: NonEmptyString,
+  isOutdated: Schema.Boolean,
+  isResolved: Schema.Boolean,
+  line: Schema.NullOr(PositiveLineNumber),
+  path: NonEmptyString,
+  side: GithubReviewCommentSide,
+  startLine: Schema.NullOr(PositiveLineNumber),
+});
+
+export type GithubPrReviewThread = typeof GithubPrReviewThread.Type;
+
+export const GithubPrReviewThreadsList = Schema.Struct({
+  data: Schema.Struct({}),
+  type: Schema.Literal("github.pr.review-threads.list"),
+});
+
+export type GithubPrReviewThreadsList = typeof GithubPrReviewThreadsList.Type;
+
+export const GithubPrReviewThreadsResult = Schema.Struct({
+  data: Schema.Struct({
+    threads: Schema.Array(GithubPrReviewThread),
+  }),
+  type: Schema.Literal("github.pr.review-threads.result"),
+});
+
+export type GithubPrReviewThreadsResult =
+  typeof GithubPrReviewThreadsResult.Type;
+
+export const GithubPrReviewCommentsReply = Schema.Struct({
+  data: Schema.Struct({
+    body: NonEmptyString,
+    commentId: Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0)),
+  }),
+  type: Schema.Literal("github.pr.review-comments.reply"),
+});
+
+export type GithubPrReviewCommentsReply =
+  typeof GithubPrReviewCommentsReply.Type;
+
+export const GithubPrReviewCommentsReplied = Schema.Struct({
+  data: Schema.Struct({
+    comment: GithubPrReviewComment,
+  }),
+  type: Schema.Literal("github.pr.review-comments.replied"),
+});
+
+export type GithubPrReviewCommentsReplied =
+  typeof GithubPrReviewCommentsReplied.Type;
+
+export const GithubPrReviewThreadsResolve = Schema.Struct({
+  data: Schema.Struct({
+    resolved: Schema.Boolean,
+    threadId: NonEmptyString,
+  }),
+  type: Schema.Literal("github.pr.review-threads.resolve"),
+});
+
+export type GithubPrReviewThreadsResolve =
+  typeof GithubPrReviewThreadsResolve.Type;
+
+export const GithubPrReviewThreadsResolved = Schema.Struct({
+  data: Schema.Struct({
+    isResolved: Schema.Boolean,
+    threadId: NonEmptyString,
+  }),
+  type: Schema.Literal("github.pr.review-threads.resolved"),
+});
+
+export type GithubPrReviewThreadsResolved =
+  typeof GithubPrReviewThreadsResolved.Type;
 
 const GitBranchSubscribeRpc = Rpc.make("git.branch.subscribe", {
   payload: GitBranchSubscribe,
@@ -346,6 +500,36 @@ const GitStatusSubscribeRpc = Rpc.make("git.status.subscribe", {
   success: GitStatusResult,
 });
 
+const GithubPrAnnotationsPostRpc = Rpc.make("github.pr.annotations.post", {
+  error: GithubPrAnnotationsError,
+  payload: GithubPrAnnotationsPost,
+  success: GithubPrAnnotationsPosted,
+});
+
+const GithubPrReviewThreadsListRpc = Rpc.make("github.pr.review-threads.list", {
+  error: GithubPrAnnotationsError,
+  payload: GithubPrReviewThreadsList,
+  success: GithubPrReviewThreadsResult,
+});
+
+const GithubPrReviewCommentsReplyRpc = Rpc.make(
+  "github.pr.review-comments.reply",
+  {
+    error: GithubPrAnnotationsError,
+    payload: GithubPrReviewCommentsReply,
+    success: GithubPrReviewCommentsReplied,
+  }
+);
+
+const GithubPrReviewThreadsResolveRpc = Rpc.make(
+  "github.pr.review-threads.resolve",
+  {
+    error: GithubPrAnnotationsError,
+    payload: GithubPrReviewThreadsResolve,
+    success: GithubPrReviewThreadsResolved,
+  }
+);
+
 export class LazyDiffRpcs extends RpcGroup.make(
   GitBranchCreateRpc,
   GitBranchDeleteRpc,
@@ -356,5 +540,9 @@ export class LazyDiffRpcs extends RpcGroup.make(
   GitDiffSubscribeRpc,
   GitRepositoryGetRpc,
   GitStatusGetRpc,
-  GitStatusSubscribeRpc
+  GitStatusSubscribeRpc,
+  GithubPrAnnotationsPostRpc,
+  GithubPrReviewThreadsListRpc,
+  GithubPrReviewCommentsReplyRpc,
+  GithubPrReviewThreadsResolveRpc
 ) {}

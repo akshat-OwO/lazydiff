@@ -7,7 +7,8 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "check-types": "tsc --noEmit"
+    "check-types": "tsc --noEmit",
+    "test": "nub --test test/**/*.test.ts"
   },
   "dependencies": {
     "effect": "catalog:effect"

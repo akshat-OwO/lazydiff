@@ -3,9 +3,10 @@ import {
   GitChangedFilesError,
   GitDiffError,
   GitStatusError,
+  GithubPrAnnotationsError,
   LazyDiffRpcs,
 } from "@lazydiff/protocol";
-import { Effect, Layer, Stream } from "effect";
+import { Effect, Layer, Option, Stream } from "effect";
 import {
   HttpRouter,
   HttpServerRequest,
@@ -14,6 +15,10 @@ import {
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 import { Git } from "@/services/git";
+import { PullRequestContext } from "@/services/pull-request-session";
+import type { OpenedPullRequest } from "@/services/pull-request-session";
+import { VCSService } from "@/services/vcs";
+import type { PullRequestRef } from "@/services/vcs";
 
 const toGitChangedFilesError = (error: Error) =>
   new GitChangedFilesError({
@@ -35,9 +40,37 @@ const toGitStatusError = (error: Error) =>
     message: error.message || "Unable to read Git status",
   });
 
+const toGithubPrAnnotationsError = (error: Error) =>
+  new GithubPrAnnotationsError({
+    message: error.message || "Unable to update pull request review comments",
+  });
+
+const requireOpenedPullRequest = (
+  pullRequest: Option.Option<OpenedPullRequest>
+): Effect.Effect<OpenedPullRequest, GithubPrAnnotationsError> =>
+  Option.match(pullRequest, {
+    onNone: () =>
+      Effect.fail(
+        new GithubPrAnnotationsError({
+          message:
+            "Pull request review comments are only available while reviewing a pull request with --pr.",
+        })
+      ),
+    onSome: Effect.succeed,
+  });
+
+const pullRequestRefOf = (pullRequest: OpenedPullRequest): PullRequestRef => ({
+  host: "github.com",
+  number: pullRequest.number,
+  owner: pullRequest.owner,
+  repo: pullRequest.repo,
+});
+
 const GitRpcHandlersLive = LazyDiffRpcs.toLayer(
   Effect.gen(function* () {
     const git = yield* Git;
+    const pullRequestContext = yield* PullRequestContext;
+    const vcs = yield* VCSService;
 
     return {
       "git.branch.create": ({ data }) =>
@@ -99,12 +132,30 @@ const GitRpcHandlersLive = LazyDiffRpcs.toLayer(
           Stream.mapError(toGitDiffError)
         ),
       "git.repository.get": () =>
-        Effect.succeed({
-          data: {
-            name: git.repositoryName,
-            source: git.reviewSource,
-          },
-          type: "git.repository.result" as const,
+        Option.match(pullRequestContext.pullRequest, {
+          onNone: () =>
+            Effect.succeed({
+              data: {
+                name: git.repositoryName,
+                source: git.reviewSource,
+              },
+              type: "git.repository.result" as const,
+            }),
+          onSome: (review) =>
+            Effect.succeed({
+              data: {
+                name: git.repositoryName,
+                pullRequest: {
+                  headSha: review.headSha,
+                  number: review.number,
+                  owner: review.owner,
+                  repo: review.repo,
+                  url: review.url,
+                },
+                source: git.reviewSource,
+              },
+              type: "git.repository.result" as const,
+            }),
         }),
       "git.status.get": ({ data }) =>
         git.fileStatuses(data.scope, data.branch).pipe(
@@ -122,6 +173,79 @@ const GitRpcHandlersLive = LazyDiffRpcs.toLayer(
           })),
           Stream.mapError(toGitStatusError)
         ),
+      "github.pr.annotations.post": ({ data }) =>
+        Effect.gen(function* () {
+          const review = yield* requireOpenedPullRequest(
+            pullRequestContext.pullRequest
+          );
+          const submission = yield* vcs
+            .createPullRequestReview(
+              pullRequestRefOf(review),
+              review.headSha,
+              data.comments
+            )
+            .pipe(Effect.mapError(toGithubPrAnnotationsError));
+
+          return {
+            data: { htmlUrl: submission.htmlUrl },
+            type: "github.pr.annotations.posted" as const,
+          };
+        }),
+      "github.pr.review-comments.reply": ({ data }) =>
+        Effect.gen(function* () {
+          const review = yield* requireOpenedPullRequest(
+            pullRequestContext.pullRequest
+          );
+          const comment = yield* vcs
+            .replyToPullRequestReviewComment(
+              pullRequestRefOf(review),
+              data.commentId,
+              data.body
+            )
+            .pipe(Effect.mapError(toGithubPrAnnotationsError));
+
+          return {
+            data: { comment },
+            type: "github.pr.review-comments.replied" as const,
+          };
+        }),
+      "github.pr.review-threads.list": () =>
+        Option.match(pullRequestContext.pullRequest, {
+          onNone: () =>
+            Effect.succeed({
+              data: { threads: [] },
+              type: "github.pr.review-threads.result" as const,
+            }),
+          onSome: (review) =>
+            vcs.listPullRequestReviewThreads(pullRequestRefOf(review)).pipe(
+              Effect.map((threads) => ({
+                data: { threads },
+                type: "github.pr.review-threads.result" as const,
+              })),
+              Effect.mapError(toGithubPrAnnotationsError)
+            ),
+        }),
+      "github.pr.review-threads.resolve": ({ data }) =>
+        Effect.gen(function* () {
+          const review = yield* requireOpenedPullRequest(
+            pullRequestContext.pullRequest
+          );
+          const result = yield* vcs
+            .setPullRequestReviewThreadResolved(
+              pullRequestRefOf(review),
+              data.threadId,
+              data.resolved
+            )
+            .pipe(Effect.mapError(toGithubPrAnnotationsError));
+
+          return {
+            data: {
+              isResolved: result.isResolved,
+              threadId: data.threadId,
+            },
+            type: "github.pr.review-threads.resolved" as const,
+          };
+        }),
     };
   })
 );

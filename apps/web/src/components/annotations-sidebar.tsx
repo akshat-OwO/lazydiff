@@ -1,12 +1,19 @@
-import { useAtom, useAtomSet, useAtomValue } from "@effect/atom-react";
+import {
+  useAtom,
+  useAtomRefresh,
+  useAtomSet,
+  useAtomValue,
+} from "@effect/atom-react";
+import { annotationRangeToGithubReviewComment } from "@lazydiff/protocol";
 import {
   ClipboardCopyIcon,
   LinkIcon,
   MessageSquareTextIcon,
+  SendHorizontalIcon,
   Trash2Icon,
   XIcon,
 } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { HighlightedCode } from "@/components/highlighted-code";
 import { TypesetMarkdown } from "@/components/typeset-markdown";
@@ -18,11 +25,20 @@ import {
   annotationsForScope,
   annotationsSidebarOpenAtom,
   formatAnnotationsMarkdown,
+  markAnnotationsSent,
   removeAnnotation,
+  sentAnnotationIdsAtom,
+  unsentAnnotations,
 } from "@/lib/annotations";
 import type { DiffAnnotation } from "@/lib/annotations";
 import { copyTextToClipboard } from "@/lib/clipboard";
-import { gitChangeScopeAtom } from "@/lib/rpc";
+import { prReviewSessionHeadShaAtom } from "@/lib/pr-review-session";
+import {
+  gitChangeScopeAtom,
+  githubPrAnnotationsPostMutation,
+  githubPrReviewThreadsAtom,
+  gitRepositoryAtom,
+} from "@/lib/rpc";
 import { cn } from "@/lib/utils";
 
 function AnnotationCard({
@@ -30,16 +46,23 @@ function AnnotationCard({
   index,
   onDelete,
   onLink,
+  sent,
 }: {
   readonly annotation: DiffAnnotation;
   readonly index: number;
   readonly onDelete: (annotationId: string) => void;
   readonly onLink: (annotation: DiffAnnotation) => void;
+  readonly sent: boolean;
 }) {
   return (
     <article className="border-border space-y-3 border-b px-4 py-4">
       <div className="flex items-center justify-between gap-2">
-        <h3 className="text-sm font-semibold">Annotation {index + 1}</h3>
+        <div className="min-w-0">
+          <h3 className="text-sm font-semibold">Annotation {index + 1}</h3>
+          {sent ? (
+            <p className="text-muted-foreground text-xs">Sent to remote</p>
+          ) : null}
+        </div>
         <div className="flex items-center gap-0.5">
           <Button
             aria-label={`Go to annotation ${index + 1}`}
@@ -75,8 +98,9 @@ function AnnotationCard({
 }
 
 type CopyState = "idle" | "copying" | "copied" | "failed";
+type SendState = "idle" | "sending" | "sent" | "failed";
 
-function copyButtonLabel(copyState: CopyState) {
+const copyButtonLabel = (copyState: CopyState, compact: boolean) => {
   if (copyState === "copying") {
     return "Copying…";
   }
@@ -89,17 +113,77 @@ function copyButtonLabel(copyState: CopyState) {
     return "Copy failed";
   }
 
-  return "Copy annotations";
-}
+  return compact ? "Copy" : "Copy annotations";
+};
+
+const sendButtonLabel = (sendState: SendState) => {
+  if (sendState === "sending") {
+    return "Sending…";
+  }
+
+  if (sendState === "sent") {
+    return "Sent to PR";
+  }
+
+  if (sendState === "failed") {
+    return "Send failed";
+  }
+
+  return "Send to remote";
+};
+
+const annotationsSummary = (
+  savedCount: number,
+  unsentCount: number
+): string => {
+  if (savedCount === 0) {
+    return "No annotations yet";
+  }
+
+  if (unsentCount === 0) {
+    return `${savedCount} saved · all sent`;
+  }
+
+  return `${unsentCount} unsent · ${savedCount} saved`;
+};
 
 function AnnotationsSidebar() {
   const scope = useAtomValue(gitChangeScopeAtom);
+  const repository = useAtomValue(gitRepositoryAtom);
+  const sessionHeadSha = useAtomValue(prReviewSessionHeadShaAtom);
   const allAnnotations = useAtomValue(annotationsAtom);
+  const sentAnnotationIds = useAtomValue(sentAnnotationIdsAtom);
   const setAnnotations = useAtomSet(annotationsAtom);
+  const setSentAnnotationIds = useAtomSet(sentAnnotationIdsAtom);
   const setFocus = useAtomSet(annotationFocusAtom);
+  const sendAnnotations = useAtomSet(githubPrAnnotationsPostMutation, {
+    mode: "promise",
+  });
+  const refreshThreads = useAtomRefresh(githubPrReviewThreadsAtom);
   const annotations = annotationsForScope(allAnnotations, scope);
+  const pullRequestHeadSha =
+    repository._tag === "Success"
+      ? repository.value.data.pullRequest?.headSha
+      : undefined;
+  // Live in-memory annotations (no session head) are always for the opened PR.
+  // A persisted session is only sendable while its captured head still matches.
+  const coordinatesMatchHead =
+    sessionHeadSha === null ||
+    (pullRequestHeadSha !== undefined && sessionHeadSha === pullRequestHeadSha);
+  const pendingAnnotations = useMemo(
+    () =>
+      coordinatesMatchHead
+        ? unsentAnnotations(annotations, sentAnnotationIds)
+        : [],
+    [annotations, coordinatesMatchHead, sentAnnotationIds]
+  );
   const [open, setOpen] = useAtom(annotationsSidebarOpenAtom);
   const [copyState, setCopyState] = useState<CopyState>("idle");
+  const [sendState, setSendState] = useState<SendState>("idle");
+  const [sendError, setSendError] = useState<string | undefined>();
+  const isPullRequestReview =
+    repository._tag === "Success" &&
+    repository.value.data.source === "pull-request";
 
   if (!open) {
     return null;
@@ -125,8 +209,69 @@ function AnnotationsSidebar() {
     })();
   };
 
+  const sendAnnotationsToRemote = () => {
+    if (sendState === "sending" || pendingAnnotations.length === 0) {
+      return;
+    }
+
+    if (!coordinatesMatchHead) {
+      setSendError(
+        "Local annotations were saved against a different pull request head. Start a new review after re-checking the diff."
+      );
+      setSendState("failed");
+      window.setTimeout(() => setSendState("idle"), 2000);
+      return;
+    }
+
+    const comments = pendingAnnotations.map((annotation) =>
+      annotationRangeToGithubReviewComment({
+        body: annotation.comment,
+        filePath: annotation.filePath,
+        range: annotation.range,
+      })
+    );
+    const pendingIds = pendingAnnotations.map((annotation) => annotation.id);
+
+    setSendError(undefined);
+    setSendState("sending");
+
+    void (async () => {
+      try {
+        await sendAnnotations({
+          payload: {
+            data: { comments },
+            type: "github.pr.annotations.post",
+          },
+        });
+        setSentAnnotationIds((current) =>
+          markAnnotationsSent(current, pendingIds)
+        );
+        refreshThreads();
+        setSendState("sent");
+      } catch (error) {
+        setSendState("failed");
+        setSendError(
+          error instanceof Error
+            ? error.message
+            : "Unable to send annotations to the pull request"
+        );
+      }
+
+      window.setTimeout(() => setSendState("idle"), 2000);
+    })();
+  };
+
   const deleteAnnotation = (annotationId: string) => {
     setAnnotations((current) => removeAnnotation(current, annotationId));
+    setSentAnnotationIds((current) => {
+      if (!current.has(annotationId)) {
+        return current;
+      }
+
+      const next = new Set(current);
+      next.delete(annotationId);
+      return next;
+    });
   };
 
   const linkToAnnotation = (annotation: DiffAnnotation) => {
@@ -147,9 +292,7 @@ function AnnotationsSidebar() {
         <div>
           <p className="text-sm font-semibold">Annotations</p>
           <p className="text-muted-foreground text-xs">
-            {annotations.length === 0
-              ? "No annotations yet"
-              : `${annotations.length} saved`}
+            {annotationsSummary(annotations.length, pendingAnnotations.length)}
           </p>
         </div>
         <Button
@@ -180,22 +323,49 @@ function AnnotationsSidebar() {
               key={annotation.id}
               onDelete={deleteAnnotation}
               onLink={linkToAnnotation}
+              sent={sentAnnotationIds.has(annotation.id)}
             />
           ))
         )}
       </ScrollArea>
 
-      <div className="border-sidebar-border border-t p-3">
-        <Button
-          className="w-full"
-          disabled={annotations.length === 0 || copyState === "copying"}
-          onClick={copyAnnotations}
-          type="button"
-          variant="outline"
+      <div className="border-sidebar-border space-y-2 border-t p-3">
+        <div
+          className={cn(
+            "grid gap-2",
+            isPullRequestReview ? "grid-cols-2" : "grid-cols-1"
+          )}
         >
-          <ClipboardCopyIcon data-icon="inline-start" />
-          {copyButtonLabel(copyState)}
-        </Button>
+          <Button
+            className="w-full"
+            disabled={annotations.length === 0 || copyState === "copying"}
+            onClick={copyAnnotations}
+            type="button"
+            variant="outline"
+          >
+            <ClipboardCopyIcon data-icon="inline-start" />
+            {copyButtonLabel(copyState, isPullRequestReview)}
+          </Button>
+          {isPullRequestReview ? (
+            <Button
+              className="w-full"
+              disabled={
+                pendingAnnotations.length === 0 || sendState === "sending"
+              }
+              onClick={sendAnnotationsToRemote}
+              type="button"
+              variant="outline"
+            >
+              <SendHorizontalIcon data-icon="inline-start" />
+              {sendButtonLabel(sendState)}
+            </Button>
+          ) : null}
+        </div>
+        {sendError === undefined ? null : (
+          <p className="text-destructive text-xs" role="alert">
+            {sendError}
+          </p>
+        )}
       </div>
     </aside>
   );

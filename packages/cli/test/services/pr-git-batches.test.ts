@@ -30,6 +30,7 @@ const session: PullRequestSession = {
     batchOf(40, 5),
   ]),
   headRefName: "feature/pr-review",
+  headSha: "0123456789abcdef0123456789abcdef01234567",
   number: 3,
   owner: "akshat-OwO",
   repo: "contingency",

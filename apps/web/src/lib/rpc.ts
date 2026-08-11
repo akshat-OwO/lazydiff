@@ -231,3 +231,23 @@ export const gitRepositoryAtom = LazyDiffRpcClient.query(
     timeToLive: "Infinity",
   }
 );
+
+export const githubPrAnnotationsPostMutation = LazyDiffRpcClient.mutation(
+  "github.pr.annotations.post"
+);
+
+export const githubPrReviewThreadsAtom = LazyDiffRpcClient.query(
+  "github.pr.review-threads.list",
+  {
+    data: {},
+    type: "github.pr.review-threads.list",
+  }
+);
+
+export const githubPrReviewCommentsReplyMutation = LazyDiffRpcClient.mutation(
+  "github.pr.review-comments.reply"
+);
+
+export const githubPrReviewThreadsResolveMutation = LazyDiffRpcClient.mutation(
+  "github.pr.review-threads.resolve"
+);
