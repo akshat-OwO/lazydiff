@@ -1,6 +1,8 @@
 import type { Option } from "effect";
 import { Context, Layer } from "effect";
 
+import type { PullRequestHost } from "@/services/vcs";
+
 /**
  * Metadata for the pull request currently under review. Kept separate from
  * {@link import("@/services/vcs").PullRequestSession} so RPC handlers do not
@@ -8,6 +10,7 @@ import { Context, Layer } from "effect";
  */
 export interface OpenedPullRequest {
   readonly headSha: string;
+  readonly host: PullRequestHost;
   readonly number: number;
   readonly owner: string;
   readonly repo: string;
@@ -30,6 +33,7 @@ export const makePullRequestContextLive = (
 
 export const openedPullRequestFromSession = (session: {
   readonly headSha: string;
+  readonly host: PullRequestHost;
   readonly number: number;
   readonly owner: string;
   readonly repo: string;
@@ -37,6 +41,7 @@ export const openedPullRequestFromSession = (session: {
   readonly url: string;
 }): OpenedPullRequest => ({
   headSha: session.headSha,
+  host: session.host,
   number: session.number,
   owner: session.owner,
   repo: session.repo,

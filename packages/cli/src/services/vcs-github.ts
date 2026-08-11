@@ -665,6 +665,7 @@ const make = Effect.gen(function* () {
       fileBatches,
       headRefName: metadata.head.ref,
       headSha: metadata.head.sha,
+      host: "github.com",
       number: metadata.number,
       owner: ref.owner,
       repo: ref.repo,
@@ -973,4 +974,6 @@ const make = Effect.gen(function* () {
   };
 });
 
-export const GithubLive = Layer.effect(VCSService, make);
+export const makeGithubVcs = make;
+
+export const GithubLive = Layer.effect(VCSService, makeGithubVcs);

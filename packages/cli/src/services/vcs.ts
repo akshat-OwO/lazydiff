@@ -11,8 +11,10 @@ import type { VcsError } from "@/schemas/errors/vcs-error";
 
 export { VcsError } from "@/schemas/errors/vcs-error";
 
+export type PullRequestHost = "bitbucket.org" | "github.com";
+
 export interface PullRequestRef {
-  readonly host: "github.com";
+  readonly host: PullRequestHost;
   readonly number: number;
   readonly owner: string;
   readonly repo: string;
@@ -33,6 +35,7 @@ export interface PullRequestSession {
   readonly fileBatches: Stream.Stream<PullRequestFileBatch, VcsError>;
   readonly headRefName: string;
   readonly headSha: string;
+  readonly host: PullRequestHost;
   readonly number: number;
   readonly owner: string;
   readonly repo: string;

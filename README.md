@@ -10,13 +10,14 @@ From a Git repository with uncommitted changes:
 npx lazydiff
 ```
 
-To review a GitHub pull request instead of local changes:
+To review a GitHub or Bitbucket pull request instead of local changes:
 
 ```sh
 npx lazydiff --pr https://github.com/owner/repo/pull/123
+npx lazydiff --pr https://bitbucket.org/workspace/repo/pull-requests/123
 ```
 
-Public pull requests work without credentials. For private repositories, set `GITHUB_TOKEN`, or authenticate with the GitHub CLI (`gh auth login`). When both are available, `GITHUB_TOKEN` takes precedence.
+Public pull requests work without credentials. For private GitHub repositories, set `GITHUB_TOKEN`, or authenticate with the GitHub CLI (`gh auth login`). When both are available, `GITHUB_TOKEN` takes precedence. For private Bitbucket repositories, set `BITBUCKET_TOKEN`. Bitbucket API tokens also need `BITBUCKET_EMAIL` (your Atlassian account email) for Basic auth.
 
 Lazydiff starts a local server and opens the review interface in your browser. Pass `--no-browser` to print the URL without opening it automatically.
 

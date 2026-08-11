@@ -126,7 +126,7 @@ export const commands = Command.make(
     pr: Flag.optional(
       Flag.string("pr").pipe(
         Flag.withAlias("p"),
-        Flag.withDescription("GitHub pull request URL to review"),
+        Flag.withDescription("GitHub or Bitbucket pull request URL to review"),
         Flag.withMetavar("URL")
       )
     ),

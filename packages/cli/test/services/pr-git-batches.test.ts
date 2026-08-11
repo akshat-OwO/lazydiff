@@ -31,6 +31,7 @@ const session: PullRequestSession = {
   ]),
   headRefName: "feature/pr-review",
   headSha: "0123456789abcdef0123456789abcdef01234567",
+  host: "github.com",
   number: 3,
   owner: "akshat-OwO",
   repo: "contingency",

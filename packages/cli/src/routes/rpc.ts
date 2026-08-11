@@ -60,7 +60,7 @@ const requireOpenedPullRequest = (
   });
 
 const pullRequestRefOf = (pullRequest: OpenedPullRequest): PullRequestRef => ({
-  host: "github.com",
+  host: pullRequest.host,
   number: pullRequest.number,
   owner: pullRequest.owner,
   repo: pullRequest.repo,
