@@ -11,6 +11,7 @@ import { HttpClient, HttpClientRequest } from "effect/unstable/http";
 
 import { buildBitbucketPullRequestFileBatches } from "@/lib/bitbucket-pull-request-batches";
 import { assertBitbucketPullRequestDiffComplete } from "@/lib/bitbucket-pull-request-diff";
+import type { BitbucketDiffstatFile } from "@/lib/bitbucket-pull-request-diff";
 import { BitbucketAuth } from "@/services/bitbucket-auth";
 import type { BitbucketCredentials } from "@/services/bitbucket-auth";
 import {
@@ -81,6 +82,8 @@ const BitbucketDiffstatStatus = Schema.Literals([
 ]);
 
 const BitbucketDiffstat = Schema.Struct({
+  lines_added: Schema.optionalKey(Schema.NullOr(Schema.Number)),
+  lines_removed: Schema.optionalKey(Schema.NullOr(Schema.Number)),
   new: BitbucketDiffstatPath,
   old: BitbucketDiffstatPath,
   status: BitbucketDiffstatStatus,
@@ -204,13 +207,15 @@ const toGitFileStatus = (
   }
 };
 
-const sortStatusEntries = (entries: readonly GitStatusEntry[]) =>
+const sortByPath = <A extends { readonly path: string }>(
+  entries: readonly A[]
+): A[] =>
   [...entries].toSorted((left, right) => left.path.localeCompare(right.path));
 
 const mapDiffstat = (
   values: readonly (typeof BitbucketDiffstat.Type)[]
-): GitStatusEntry[] =>
-  sortStatusEntries(
+): BitbucketDiffstatFile[] =>
+  sortByPath(
     values.flatMap((entry) => {
       const status = toGitFileStatus(entry.status);
 
@@ -224,9 +229,24 @@ const mapDiffstat = (
         return [];
       }
 
-      return [{ path, status }];
+      return [
+        {
+          linesAdded: entry.lines_added ?? 0,
+          linesRemoved: entry.lines_removed ?? 0,
+          path,
+          status,
+        },
+      ];
     })
   );
+
+const toGitStatusEntries = (
+  files: readonly BitbucketDiffstatFile[]
+): GitStatusEntry[] =>
+  files.map((file) => ({
+    path: file.path,
+    status: file.status,
+  }));
 
 const authorLoginOf = (
   user: typeof BitbucketCommentUser.Type | undefined
@@ -889,15 +909,18 @@ export const makeBitbucketVcs = Effect.gen(function* () {
 
           yield* requireMatchingHeadSha(client, hasCredentials, ref, headSha);
 
-          const entries = mapDiffstat(diffstat);
+          const files = mapDiffstat(diffstat);
           yield* assertBitbucketPullRequestDiffComplete(
-            entries,
+            files,
             patch,
             pullRequestUrl
           );
 
           return Stream.fromIterable(
-            buildBitbucketPullRequestFileBatches(entries, patch)
+            buildBitbucketPullRequestFileBatches(
+              toGitStatusEntries(files),
+              patch
+            )
           );
         })
       );
