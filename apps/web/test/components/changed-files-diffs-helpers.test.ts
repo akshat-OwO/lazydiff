@@ -168,7 +168,8 @@ test("resolveCodeViewItem advances version when line annotations change", () => 
 
   strictEqual(withoutAnnotations.version, 0);
   strictEqual(withDraft.annotations, draftAnnotations);
-  strictEqual(withDraft.version, withoutAnnotations.version + 1);
+  // Pierre types version as optional; assert concrete published values.
+  strictEqual(withDraft.version, 1);
   strictEqual(withDraftAgain, withDraft);
 });
 
@@ -178,7 +179,8 @@ test("resolveCodeViewItem advances version when collapse state changes", () => {
   const collapsed = resolveCodeViewItem(fileDiff, true, undefined, 0);
   const collapsedForced = resolveCodeViewItem(fileDiff, true, undefined, 1);
 
+  strictEqual(expanded.version, 0);
   strictEqual(collapsed.collapsed, true);
-  strictEqual(collapsed.version, expanded.version + 1);
-  strictEqual(collapsedForced.version, collapsed.version + 1);
+  strictEqual(collapsed.version, 1);
+  strictEqual(collapsedForced.version, 2);
 });
