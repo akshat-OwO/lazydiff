@@ -285,9 +285,10 @@ export function GitBranchPicker({ head }: GitBranchPickerProps) {
     } catch (actionError) {
       setDeleteError(toErrorMessage(actionError));
     } finally {
-      refreshBranches();
       setDeletePending(false);
     }
+
+    refreshBranches();
   };
 
   return (
