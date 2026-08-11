@@ -1,0 +1,384 @@
+import type { GitFileStatus, GitStatusEntry } from "@lazydiff/protocol";
+import { Effect, Layer, Option, Ref, Schedule, Schema, Stream } from "effect";
+import type { Redacted } from "effect";
+import type { HttpClientResponse } from "effect/unstable/http";
+import { Headers, HttpClient, HttpClientRequest } from "effect/unstable/http";
+
+import { diffBatchSize } from "@/lib/diff-batches";
+import { assertPullRequestFilesComplete } from "@/lib/github-pull-request-files";
+import { buildUnifiedPatchFromGithubFiles } from "@/lib/github-pull-request-patch";
+import {
+  formatGithubPullRequestUrl,
+  parseGithubPullRequestUrl,
+} from "@/lib/github-pull-request-url";
+import { GithubAuth } from "@/services/github-auth";
+import { VCSService, VcsError } from "@/services/vcs";
+import type {
+  PullRequestFileBatch,
+  PullRequestRef,
+  PullRequestSession,
+} from "@/services/vcs";
+
+const githubApiVersion = "2022-11-28";
+const githubApiBaseUrl = "https://api.github.com";
+const userAgent = "lazydiff";
+const githubFilesPerPage = 100;
+
+const GithubPullRequest = Schema.Struct({
+  base: Schema.Struct({
+    ref: Schema.String,
+  }),
+  changed_files: Schema.Number,
+  head: Schema.Struct({
+    ref: Schema.String,
+  }),
+  number: Schema.Number,
+  title: Schema.String,
+});
+
+const GithubPullRequestFileStatus = Schema.Literals([
+  "added",
+  "removed",
+  "modified",
+  "renamed",
+  "copied",
+  "changed",
+  "unchanged",
+]);
+
+const GithubPullRequestFile = Schema.Struct({
+  filename: Schema.String,
+  patch: Schema.optionalKey(Schema.String),
+  previous_filename: Schema.optionalKey(Schema.String),
+  status: GithubPullRequestFileStatus,
+});
+
+const GithubPullRequestFiles = Schema.Array(GithubPullRequestFile);
+
+const decodePullRequest = Schema.decodeEffect(
+  Schema.toCodecJson(GithubPullRequest)
+);
+const decodePullRequestFiles = Schema.decodeEffect(
+  Schema.toCodecJson(GithubPullRequestFiles)
+);
+
+const authenticationHelp =
+  "Authenticate with `gh auth login`, or set the GITHUB_TOKEN environment variable.";
+
+const toGitFileStatus = (
+  status: typeof GithubPullRequestFileStatus.Type
+): GitFileStatus | undefined => {
+  switch (status) {
+    case "added":
+    case "copied": {
+      return "added";
+    }
+    case "removed": {
+      return "deleted";
+    }
+    case "renamed": {
+      return "renamed";
+    }
+    case "modified":
+    case "changed": {
+      return "modified";
+    }
+    case "unchanged": {
+      return undefined;
+    }
+    default: {
+      return undefined;
+    }
+  }
+};
+
+const nextLinkPattern = /^\s*<(?<url>[^>]+)>\s*;\s*rel="next"\s*$/iu;
+
+const nextLinkUrl = (linkHeader: Option.Option<string>): string | undefined => {
+  if (Option.isNone(linkHeader)) {
+    return undefined;
+  }
+
+  for (const part of linkHeader.value.split(",")) {
+    const match = nextLinkPattern.exec(part);
+    const url = match?.groups?.url;
+
+    if (url !== undefined) {
+      return url;
+    }
+  }
+
+  return undefined;
+};
+
+const sortStatusEntries = (entries: readonly GitStatusEntry[]) =>
+  [...entries].toSorted((left, right) => left.path.localeCompare(right.path));
+
+const mapGithubFiles = (
+  files: readonly (typeof GithubPullRequestFile.Type)[]
+): GitStatusEntry[] =>
+  sortStatusEntries(
+    files.flatMap((file) => {
+      const status = toGitFileStatus(file.status);
+
+      if (status === undefined) {
+        return [];
+      }
+
+      return [{ path: file.filename, status }];
+    })
+  );
+
+const makeAuthedClient = (
+  baseClient: HttpClient.HttpClient,
+  token: Option.Option<Redacted.Redacted<string>>
+) => {
+  const withDefaults = HttpClient.mapRequest(
+    baseClient,
+    HttpClientRequest.setHeaders({
+      "User-Agent": userAgent,
+      "X-GitHub-Api-Version": githubApiVersion,
+    })
+  );
+
+  return Option.match(token, {
+    onNone: () => withDefaults,
+    onSome: (value) =>
+      HttpClient.mapRequest(withDefaults, HttpClientRequest.bearerToken(value)),
+  }).pipe(
+    HttpClient.retryTransient({
+      schedule: Schedule.exponential("100 millis"),
+      times: 2,
+    })
+  );
+};
+
+const responseError = (
+  response: HttpClientResponse.HttpClientResponse,
+  hasToken: boolean,
+  ref: PullRequestRef
+) => {
+  const pullRequestUrl = formatGithubPullRequestUrl(ref);
+
+  if (response.status === 401 || response.status === 403) {
+    return new VcsError({
+      message: hasToken
+        ? `GitHub rejected credentials while fetching ${pullRequestUrl}. ${authenticationHelp}`
+        : `GitHub authentication is required to fetch ${pullRequestUrl}. ${authenticationHelp}`,
+      reason: "AuthenticationRequired",
+    });
+  }
+
+  if (response.status === 404) {
+    return new VcsError({
+      message: hasToken
+        ? `Pull request not found: ${pullRequestUrl}. Confirm the URL is correct and that your GitHub credentials can access the repository.`
+        : `Pull request not found: ${pullRequestUrl}. If this is a private repository, ${authenticationHelp}`,
+      reason: hasToken ? "NotFound" : "AuthenticationRequired",
+    });
+  }
+
+  if (response.status === 406) {
+    return new VcsError({
+      message: `The diff for ${pullRequestUrl} is too large for the GitHub API to return.`,
+      reason: "Unsupported",
+    });
+  }
+
+  return new VcsError({
+    message: `GitHub API request failed with status ${response.status} for ${pullRequestUrl}`,
+    reason: "HttpError",
+  });
+};
+
+const getOkResponse = (
+  client: HttpClient.HttpClient,
+  hasToken: boolean,
+  ref: PullRequestRef,
+  url: string,
+  options?: HttpClientRequest.Options.NoUrl
+) =>
+  Effect.gen(function* () {
+    const response = yield* client.get(url, options).pipe(
+      Effect.mapError(
+        (error) =>
+          new VcsError({
+            message: `Unable to reach GitHub for ${formatGithubPullRequestUrl(ref)}: ${error.message}`,
+            reason: "HttpError",
+          })
+      )
+    );
+
+    if (response.status < 200 || response.status >= 300) {
+      return yield* Effect.fail(responseError(response, hasToken, ref));
+    }
+
+    return response;
+  });
+
+const fetchPullRequestMetadata = (
+  client: HttpClient.HttpClient,
+  hasToken: boolean,
+  ref: PullRequestRef
+) =>
+  Effect.gen(function* () {
+    const response = yield* getOkResponse(
+      client,
+      hasToken,
+      ref,
+      `${githubApiBaseUrl}/repos/${ref.owner}/${ref.repo}/pulls/${ref.number}`,
+      { accept: "application/vnd.github+json" }
+    );
+    const json = yield* response.json.pipe(
+      Effect.mapError(
+        (error) =>
+          new VcsError({
+            message: `Unable to read GitHub pull request metadata: ${error.message}`,
+            reason: "DecodeError",
+          })
+      )
+    );
+
+    return yield* decodePullRequest(json).pipe(
+      Effect.mapError(
+        (error) =>
+          new VcsError({
+            message: `Unable to decode GitHub pull request metadata: ${error.message}`,
+            reason: "DecodeError",
+          })
+      )
+    );
+  });
+
+const fetchPullRequestFilePage = (
+  client: HttpClient.HttpClient,
+  hasToken: boolean,
+  ref: PullRequestRef,
+  pageUrl: string
+) =>
+  Effect.gen(function* () {
+    const response = yield* getOkResponse(client, hasToken, ref, pageUrl, {
+      accept: "application/vnd.github+json",
+    });
+    const json = yield* response.json.pipe(
+      Effect.mapError(
+        (error) =>
+          new VcsError({
+            message: `Unable to read GitHub pull request files: ${error.message}`,
+            reason: "DecodeError",
+          })
+      )
+    );
+    const files = yield* decodePullRequestFiles(json).pipe(
+      Effect.mapError(
+        (error) =>
+          new VcsError({
+            message: `Unable to decode GitHub pull request files: ${error.message}`,
+            reason: "DecodeError",
+          })
+      )
+    );
+
+    return {
+      files,
+      nextPageUrl: nextLinkUrl(Headers.get(response.headers, "link")),
+    };
+  });
+
+/**
+ * Streams every changed file, one page request at a time, so review can start
+ * before the whole pull request has been downloaded.
+ */
+const pullRequestFileStream = (
+  client: HttpClient.HttpClient,
+  hasToken: boolean,
+  ref: PullRequestRef,
+  pageUrl: string
+): Stream.Stream<typeof GithubPullRequestFile.Type, VcsError> =>
+  Stream.unwrap(
+    fetchPullRequestFilePage(client, hasToken, ref, pageUrl).pipe(
+      Effect.map(({ files, nextPageUrl }) => {
+        const page = Stream.fromIterable(files);
+
+        return nextPageUrl === undefined
+          ? page
+          : Stream.concat(
+              page,
+              Stream.suspend(() =>
+                pullRequestFileStream(client, hasToken, ref, nextPageUrl)
+              )
+            );
+      })
+    )
+  );
+
+const make = Effect.gen(function* () {
+  const httpClient = yield* HttpClient.HttpClient;
+  const githubAuth = yield* GithubAuth;
+
+  const openPullRequest = Effect.fn(
+    "lazydiff/services/vcsGithub/openPullRequest"
+  )(function* (url: string) {
+    const ref = yield* parseGithubPullRequestUrl(url).pipe(
+      Option.match({
+        onNone: () =>
+          Effect.fail(
+            new VcsError({
+              message: `Unsupported pull request URL: ${url}. Expected a GitHub URL like https://github.com/owner/repo/pull/123.`,
+              reason: "InvalidPullRequestUrl",
+            })
+          ),
+        onSome: Effect.succeed,
+      })
+    );
+    const token = yield* githubAuth.resolveToken();
+    const client = makeAuthedClient(httpClient, token);
+    const hasToken = Option.isSome(token);
+    const metadata = yield* fetchPullRequestMetadata(client, hasToken, ref);
+    const pullRequestUrl = formatGithubPullRequestUrl(ref);
+    const retrievedFileCount = yield* Ref.make(0);
+    const fileBatches = pullRequestFileStream(
+      client,
+      hasToken,
+      ref,
+      `${githubApiBaseUrl}/repos/${ref.owner}/${ref.repo}/pulls/${ref.number}/files?per_page=${githubFilesPerPage}`
+    ).pipe(
+      Stream.tap(() => Ref.update(retrievedFileCount, (count) => count + 1)),
+      Stream.grouped(diffBatchSize),
+      Stream.map(
+        (files): PullRequestFileBatch => ({
+          entries: mapGithubFiles(files),
+          patch: buildUnifiedPatchFromGithubFiles(files),
+        })
+      ),
+      Stream.onEnd(
+        Ref.get(retrievedFileCount).pipe(
+          Effect.flatMap((count) =>
+            assertPullRequestFilesComplete(
+              count,
+              metadata.changed_files,
+              pullRequestUrl
+            )
+          )
+        )
+      )
+    );
+
+    const session: PullRequestSession = {
+      baseRefName: metadata.base.ref,
+      fileBatches,
+      headRefName: metadata.head.ref,
+      number: metadata.number,
+      owner: ref.owner,
+      repo: ref.repo,
+      title: metadata.title,
+      url: pullRequestUrl,
+    };
+
+    return session;
+  });
+
+  return { openPullRequest };
+});
+
+export const GithubLive = Layer.effect(VCSService, make);

@@ -212,10 +212,20 @@ export type GitDiffSubscribe = typeof GitDiffSubscribe.Type;
 export const GitDiffResult = Schema.Struct({
   data: Schema.Struct({
     /**
-     * Unified patch covering every file in the scope, empty when the scope has
-     * no textual changes.
+     * True when this emission finishes the current sync. Clients may keep
+     * showing a progressive total while `complete` is still false.
+     */
+    complete: Schema.Boolean,
+    /**
+     * Unified patch fragment for this batch. When `reset` is false, append it
+     * to the patch accumulated from earlier emissions in the same sync.
      */
     patch: Schema.String,
+    /**
+     * True for the first emission of a sync so clients discard prior batches
+     * (for example after a working-tree change).
+     */
+    reset: Schema.Boolean,
   }),
   type: Schema.Literal("git.diff.result"),
 });
@@ -229,9 +239,17 @@ export const GitRepositoryGet = Schema.Struct({
 
 export type GitRepositoryGet = typeof GitRepositoryGet.Type;
 
+export const GitReviewSource = Schema.Literals([
+  "working-tree",
+  "pull-request",
+]);
+
+export type GitReviewSource = typeof GitReviewSource.Type;
+
 export const GitRepositoryResult = Schema.Struct({
   data: Schema.Struct({
     name: NonEmptyString,
+    source: GitReviewSource,
   }),
   type: Schema.Literal("git.repository.result"),
 });

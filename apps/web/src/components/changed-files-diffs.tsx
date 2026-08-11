@@ -1,6 +1,6 @@
+import { CodeView } from "@pierre/diffs/react";
 import { FileDiffIcon, FileWarningIcon } from "lucide-react";
 
-import { FileDiffCard } from "@/components/file-diff-card";
 import { Button } from "@/components/ui/button";
 import {
   Empty,
@@ -15,18 +15,20 @@ import { useChangedFilesDiffs } from "@/components/use-changed-files-diffs";
 
 function ChangedFilesDiffs() {
   const {
+    codeViewOptions,
+    codeViewRef,
+    complete,
     fileDiffs,
     gitDiff,
     isHighlighterFailed,
     isHighlighterReady,
-    isPathCollapsed,
-    onDiffsScroll,
+    items,
+    renderAnnotation,
+    renderCustomHeader,
     retryHighlighterPreload,
-    scrollportRef,
-    toggleCollapsed,
   } = useChangedFilesDiffs();
 
-  if (gitDiff._tag === "Initial") {
+  if (gitDiff._tag === "Initial" && fileDiffs.length === 0) {
     return (
       <div
         aria-label="Loading diffs"
@@ -39,7 +41,7 @@ function ChangedFilesDiffs() {
     );
   }
 
-  if (gitDiff._tag === "Failure") {
+  if (gitDiff._tag === "Failure" && fileDiffs.length === 0) {
     return (
       <Empty className="h-full overflow-y-auto">
         <EmptyHeader>
@@ -53,7 +55,7 @@ function ChangedFilesDiffs() {
     );
   }
 
-  if (fileDiffs.length === 0) {
+  if (fileDiffs.length === 0 && complete) {
     return (
       <Empty className="h-full overflow-y-auto">
         <EmptyHeader>
@@ -92,21 +94,30 @@ function ChangedFilesDiffs() {
   }
 
   return (
-    <div
-      className="absolute inset-0 overflow-y-auto"
-      data-slot="file-diffs-scrollport"
-      onScroll={onDiffsScroll}
-      ref={scrollportRef}
-    >
-      {fileDiffs.map((fileDiff) => (
-        <FileDiffCard
-          fileDiff={fileDiff}
-          isCollapsed={isPathCollapsed(fileDiff.name)}
-          isHighlighterReady={isHighlighterReady}
-          key={fileDiff.name}
-          onToggle={toggleCollapsed}
-        />
-      ))}
+    <div className="absolute inset-0" data-slot="file-diffs-scrollport">
+      {!isHighlighterReady && (
+        <div
+          aria-label="Loading diffs"
+          className="bg-background/80 absolute inset-0 z-10 space-y-3 overflow-y-auto p-4"
+        >
+          <Skeleton className="h-8 w-full" />
+          <Skeleton className="h-64 w-full" />
+          <Skeleton className="h-8 w-full" />
+        </div>
+      )}
+      <CodeView
+        className="h-full overflow-auto"
+        items={items}
+        options={codeViewOptions}
+        ref={codeViewRef}
+        renderAnnotation={renderAnnotation}
+        renderCustomHeader={renderCustomHeader}
+      />
+      {!complete && (
+        <p className="text-muted-foreground bg-background/90 pointer-events-none absolute inset-x-0 bottom-0 px-4 py-2 text-sm">
+          Loading more files… ({fileDiffs.length} loaded)
+        </p>
+      )}
     </div>
   );
 }

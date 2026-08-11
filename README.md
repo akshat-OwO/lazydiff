@@ -10,6 +10,14 @@ From a Git repository with uncommitted changes:
 npx lazydiff
 ```
 
+To review a GitHub pull request instead of local changes:
+
+```sh
+npx lazydiff --pr https://github.com/owner/repo/pull/123
+```
+
+Public pull requests work without credentials. For private repositories, set `GITHUB_TOKEN`, or authenticate with the GitHub CLI (`gh auth login`). When both are available, `GITHUB_TOKEN` takes precedence.
+
 Lazydiff starts a local server and opens the review interface in your browser. Pass `--no-browser` to print the URL without opening it automatically.
 
 Production builds hide Effect HTTP server logs by default. Run with `DEBUG=1` to show the listen and request logs while keeping the startup summary:

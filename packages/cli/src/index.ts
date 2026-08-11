@@ -3,17 +3,27 @@
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Effect, Layer } from "effect";
 import { Command } from "effect/unstable/cli";
+import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 
 import { commands } from "@/cmds/index";
+import { GithubAuthLive } from "@/services/github-auth";
 import { HttpServerConnectionsLive } from "@/services/http-server-connections";
+import { GithubLive } from "@/services/vcs-github";
 
 import packageJson from "../package.json" with { type: "json" };
-import { GitLive } from "./services/git.ts";
 import { UiInterfaceLive } from "./services/ui-interface.ts";
+
+const GithubAuthLayer = GithubAuthLive.pipe(Layer.provide(NodeServices.layer));
 
 const AppLive = Layer.mergeAll(
   NodeServices.layer,
-  GitLive.pipe(Layer.provide(NodeServices.layer)),
+  FetchHttpClient.layer,
+  GithubAuthLayer,
+  GithubLive.pipe(
+    Layer.provide(GithubAuthLayer),
+    Layer.provide(FetchHttpClient.layer),
+    Layer.provide(NodeServices.layer)
+  ),
   HttpServerConnectionsLive,
   UiInterfaceLive
 );
