@@ -1,0 +1,14 @@
+{
+  "$schema": "https://react.doctor/schema/config.json",
+  // Keep the full shadcn UI kit checked in for agents even when unused.
+  // Suppress kit diagnostics; app code outside components/ui stays scored.
+  // unused-dependency is package-level and would still flag kit-only packages.
+  "ignore": {
+    "overrides": [
+      {
+        "files": ["**/src/components/ui/**"]
+      }
+    ],
+    "rules": ["deslop/unused-dependency"]
+  }
+}

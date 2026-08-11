@@ -15,9 +15,10 @@ import {
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 import { Git } from "@/services/git";
-import { PullRequestSession } from "@/services/pull-request-session";
+import { PullRequestContext } from "@/services/pull-request-session";
+import type { OpenedPullRequest } from "@/services/pull-request-session";
 import { VCSService } from "@/services/vcs";
-import type { PullRequestRef, PullRequestReview } from "@/services/vcs";
+import type { PullRequestRef } from "@/services/vcs";
 
 const toGitChangedFilesError = (error: Error) =>
   new GitChangedFilesError({
@@ -44,10 +45,10 @@ const toGithubPrAnnotationsError = (error: Error) =>
     message: error.message || "Unable to update pull request review comments",
   });
 
-const requirePullRequestReview = (
-  review: Option.Option<PullRequestReview>
-): Effect.Effect<PullRequestReview, GithubPrAnnotationsError> =>
-  Option.match(review, {
+const requireOpenedPullRequest = (
+  pullRequest: Option.Option<OpenedPullRequest>
+): Effect.Effect<OpenedPullRequest, GithubPrAnnotationsError> =>
+  Option.match(pullRequest, {
     onNone: () =>
       Effect.fail(
         new GithubPrAnnotationsError({
@@ -58,17 +59,17 @@ const requirePullRequestReview = (
     onSome: Effect.succeed,
   });
 
-const pullRequestRefOf = (review: PullRequestReview): PullRequestRef => ({
-  host: review.host,
-  number: review.number,
-  owner: review.owner,
-  repo: review.repo,
+const pullRequestRefOf = (pullRequest: OpenedPullRequest): PullRequestRef => ({
+  host: pullRequest.host,
+  number: pullRequest.number,
+  owner: pullRequest.owner,
+  repo: pullRequest.repo,
 });
 
 const GitRpcHandlersLive = LazyDiffRpcs.toLayer(
   Effect.gen(function* () {
     const git = yield* Git;
-    const pullRequestSession = yield* PullRequestSession;
+    const pullRequestContext = yield* PullRequestContext;
     const vcs = yield* VCSService;
 
     return {
@@ -119,19 +120,19 @@ const GitRpcHandlersLive = LazyDiffRpcs.toLayer(
           Effect.mapError(toGitChangedFilesError)
         ),
       "git.diff.subscribe": ({ data }) =>
-        Stream.merge(
-          Stream.make("initial" as const),
-          git.repositoryChanges
-        ).pipe(
-          Stream.mapEffect(() => git.scopeDiff(data.scope, data.branch)),
-          Stream.map((patch) => ({
-            data: { patch },
+        git.diffBatches(data.scope, data.branch).pipe(
+          Stream.map((batch) => ({
+            data: {
+              complete: batch.complete,
+              patch: batch.patch,
+              reset: batch.reset,
+            },
             type: "git.diff.result" as const,
           })),
           Stream.mapError(toGitDiffError)
         ),
       "git.repository.get": () =>
-        Option.match(pullRequestSession.review, {
+        Option.match(pullRequestContext.pullRequest, {
           onNone: () =>
             Effect.succeed({
               data: {
@@ -165,11 +166,7 @@ const GitRpcHandlersLive = LazyDiffRpcs.toLayer(
           Effect.mapError(toGitStatusError)
         ),
       "git.status.subscribe": ({ data }) =>
-        Stream.merge(
-          Stream.make("initial" as const),
-          git.repositoryChanges
-        ).pipe(
-          Stream.mapEffect(() => git.fileStatuses(data.scope, data.branch)),
+        git.statusChanges(data.scope, data.branch).pipe(
           Stream.map((entries) => ({
             data: { entries },
             type: "git.status.result" as const,
@@ -178,8 +175,8 @@ const GitRpcHandlersLive = LazyDiffRpcs.toLayer(
         ),
       "github.pr.annotations.post": ({ data }) =>
         Effect.gen(function* () {
-          const review = yield* requirePullRequestReview(
-            pullRequestSession.review
+          const review = yield* requireOpenedPullRequest(
+            pullRequestContext.pullRequest
           );
           const submission = yield* vcs
             .createPullRequestReview(
@@ -196,8 +193,8 @@ const GitRpcHandlersLive = LazyDiffRpcs.toLayer(
         }),
       "github.pr.review-comments.reply": ({ data }) =>
         Effect.gen(function* () {
-          const review = yield* requirePullRequestReview(
-            pullRequestSession.review
+          const review = yield* requireOpenedPullRequest(
+            pullRequestContext.pullRequest
           );
           const comment = yield* vcs
             .replyToPullRequestReviewComment(
@@ -213,7 +210,7 @@ const GitRpcHandlersLive = LazyDiffRpcs.toLayer(
           };
         }),
       "github.pr.review-threads.list": () =>
-        Option.match(pullRequestSession.review, {
+        Option.match(pullRequestContext.pullRequest, {
           onNone: () =>
             Effect.succeed({
               data: { threads: [] },
@@ -230,8 +227,8 @@ const GitRpcHandlersLive = LazyDiffRpcs.toLayer(
         }),
       "github.pr.review-threads.resolve": ({ data }) =>
         Effect.gen(function* () {
-          const review = yield* requirePullRequestReview(
-            pullRequestSession.review
+          const review = yield* requireOpenedPullRequest(
+            pullRequestContext.pullRequest
           );
           const result = yield* vcs
             .setPullRequestReviewThreadResolved(

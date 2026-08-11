@@ -3,7 +3,9 @@ import { useEffect, useRef } from "react";
 
 import { annotationsAtom, sentAnnotationIdsAtom } from "@/lib/annotations";
 import {
+  decidePrReviewSessionRestore,
   prReviewSessionActiveAtom,
+  prReviewSessionHeadShaAtom,
   readPrReviewSession,
   writePrReviewSession,
 } from "@/lib/pr-review-session";
@@ -19,6 +21,9 @@ function PrReviewSessionSync() {
   const setAnnotations = useAtomSet(annotationsAtom);
   const setSentAnnotationIds = useAtomSet(sentAnnotationIdsAtom);
   const [sessionActive, setSessionActive] = useAtom(prReviewSessionActiveAtom);
+  const [sessionHeadSha, setSessionHeadSha] = useAtom(
+    prReviewSessionHeadShaAtom
+  );
   const restoredKeyRef = useRef<string | null>(null);
 
   const pullRequest =
@@ -29,36 +34,72 @@ function PrReviewSessionSync() {
   useEffect(() => {
     if (pullRequest === undefined) {
       setSessionActive(false);
+      setSessionHeadSha(null);
       restoredKeyRef.current = null;
       return;
     }
 
-    const key = `${pullRequest.owner}/${pullRequest.repo}#${pullRequest.number}`;
+    const key = `${pullRequest.owner}/${pullRequest.repo}#${pullRequest.number}@${pullRequest.headSha}`;
+    const previousKey = restoredKeyRef.current;
 
-    if (restoredKeyRef.current === key) {
+    if (previousKey === key) {
       return;
     }
 
     restoredKeyRef.current = key;
-    const stored = readPrReviewSession(pullRequest);
+    const decision = decidePrReviewSessionRestore(
+      readPrReviewSession(pullRequest),
+      pullRequest.headSha
+    );
 
-    if (stored === null) {
-      setSessionActive(false);
+    if (decision._tag === "restore") {
+      setSessionActive(true);
+      setSessionHeadSha(decision.session.headSha);
+      setAnnotations(decision.session.annotations);
+      setSentAnnotationIds(new Set(decision.session.sentAnnotationIds));
       return;
     }
 
-    setSessionActive(true);
-    setAnnotations(stored.annotations);
-    setSentAnnotationIds(new Set(stored.sentAnnotationIds));
-  }, [pullRequest, setAnnotations, setSentAnnotationIds, setSessionActive]);
+    setSessionActive(false);
+    setSessionHeadSha(null);
+
+    // A head change or stale persisted session must not leave old coordinates
+    // sendable against the newly opened head.
+    if (decision._tag === "stale" || previousKey !== null) {
+      setAnnotations([]);
+      setSentAnnotationIds(new Set());
+    }
+  }, [
+    pullRequest,
+    setAnnotations,
+    setSentAnnotationIds,
+    setSessionActive,
+    setSessionHeadSha,
+  ]);
 
   useEffect(() => {
-    if (!sessionActive || pullRequest === undefined) {
+    if (
+      !sessionActive ||
+      pullRequest === undefined ||
+      sessionHeadSha === null ||
+      sessionHeadSha !== pullRequest.headSha
+    ) {
       return;
     }
 
-    writePrReviewSession(pullRequest, annotations, sentAnnotationIds);
-  }, [annotations, pullRequest, sentAnnotationIds, sessionActive]);
+    writePrReviewSession(
+      pullRequest,
+      annotations,
+      sentAnnotationIds,
+      sessionHeadSha
+    );
+  }, [
+    annotations,
+    pullRequest,
+    sentAnnotationIds,
+    sessionActive,
+    sessionHeadSha,
+  ]);
 
   return null;
 }

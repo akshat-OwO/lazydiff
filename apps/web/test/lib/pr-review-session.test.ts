@@ -4,6 +4,8 @@ import { test } from "node:test";
 import type { DiffAnnotation } from "../../src/lib/annotations.ts";
 import {
   clearPrReviewSession,
+  decidePrReviewSessionRestore,
+  prReviewSessionMatchesHead,
   readPrReviewSession,
   writePrReviewSession,
 } from "../../src/lib/pr-review-session.ts";
@@ -59,4 +61,82 @@ test("writePrReviewSession round-trips annotations and sent ids", () => {
 
   clearPrReviewSession(pullRequest);
   strictEqual(readPrReviewSession(pullRequest), null);
+});
+
+test("prReviewSessionMatchesHead rejects a different pull request head", () => {
+  installMemoryLocalStorage();
+  clearPrReviewSession(pullRequest);
+  writePrReviewSession(
+    pullRequest,
+    [annotation],
+    new Set(),
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  );
+
+  const stored = readPrReviewSession(pullRequest);
+  strictEqual(stored === null, false);
+  if (stored === null) {
+    return;
+  }
+
+  strictEqual(prReviewSessionMatchesHead(stored, pullRequest.headSha), false);
+  strictEqual(
+    prReviewSessionMatchesHead(
+      stored,
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ),
+    true
+  );
+  strictEqual(stored.headSha, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+});
+
+test("writePrReviewSession keeps the session head when the live PR head moves", () => {
+  installMemoryLocalStorage();
+  clearPrReviewSession(pullRequest);
+  writePrReviewSession(
+    pullRequest,
+    [annotation],
+    new Set(),
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  );
+
+  writePrReviewSession(
+    { ...pullRequest, headSha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" },
+    [annotation],
+    new Set(["annotation-1"]),
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  );
+
+  const stored = readPrReviewSession(pullRequest);
+  strictEqual(stored?.headSha, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+  deepStrictEqual(stored?.sentAnnotationIds, ["annotation-1"]);
+});
+
+test("decidePrReviewSessionRestore discards sessions from another head", () => {
+  installMemoryLocalStorage();
+  clearPrReviewSession(pullRequest);
+  writePrReviewSession(
+    pullRequest,
+    [annotation],
+    new Set(["annotation-1"]),
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  );
+
+  const stored = readPrReviewSession(pullRequest);
+  deepStrictEqual(decidePrReviewSessionRestore(stored, pullRequest.headSha), {
+    _tag: "stale",
+  });
+  deepStrictEqual(
+    decidePrReviewSessionRestore(
+      stored,
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ),
+    {
+      _tag: "restore",
+      session: stored,
+    }
+  );
+  deepStrictEqual(decidePrReviewSessionRestore(null, pullRequest.headSha), {
+    _tag: "inactive",
+  });
 });

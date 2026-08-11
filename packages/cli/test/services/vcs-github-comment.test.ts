@@ -2,13 +2,24 @@ import { match, ok, strictEqual } from "node:assert";
 import { test } from "node:test";
 
 import { NodeServices } from "@effect/platform-node";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Option } from "effect";
 import type { HttpClientRequest } from "effect/unstable/http";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
+import { GithubAuth, GithubAuthLive } from "../../src/services/github-auth.ts";
 import { GithubLive } from "../../src/services/vcs-github.ts";
 import { VCSService } from "../../src/services/vcs.ts";
 import type { PullRequestRef } from "../../src/services/vcs.ts";
+
+const GithubAuthTestLive = GithubAuthLive.pipe(
+  Layer.provide(NodeServices.layer)
+);
+
+const GithubAuthNoneLive = Layer.succeed(GithubAuth, {
+  resolveToken: Effect.fn("test/githubAuth/none")(() =>
+    Effect.succeed(Option.none())
+  ),
+});
 
 const pullRequestRef: PullRequestRef = {
   host: "github.com",
@@ -72,6 +83,7 @@ test("createPullRequestReview posts inline line comments", async () => {
     }).pipe(
       Effect.provide(
         GithubLive.pipe(
+          Layer.provide(GithubAuthTestLive),
           Layer.provide(FakeHttpLive),
           Layer.provide(NodeServices.layer)
         )
@@ -117,32 +129,103 @@ test("createPullRequestReview posts inline line comments", async () => {
 });
 
 test("createPullRequestReview requires authentication", async () => {
-  const previousToken = process.env.GITHUB_TOKEN;
-  const previousGhConfig = process.env.GH_CONFIG_DIR;
-  delete process.env.GITHUB_TOKEN;
-  process.env.GH_CONFIG_DIR = "/tmp/lazydiff-empty-gh-config";
-
   const FakeHttpLive = Layer.succeed(
     HttpClient.HttpClient,
     makeRecordingHttpClient(() => new Response("unused", { status: 500 }))
+  );
+
+  const error = await Effect.gen(function* () {
+    const vcs = yield* VCSService;
+    return yield* vcs
+      .createPullRequestReview(pullRequestRef, "abc", [
+        {
+          body: "comment",
+          line: 1,
+          path: "a.ts",
+          side: "RIGHT",
+        },
+      ])
+      .pipe(Effect.flip);
+  }).pipe(
+    Effect.provide(
+      GithubLive.pipe(
+        Layer.provide(GithubAuthNoneLive),
+        Layer.provide(FakeHttpLive),
+        Layer.provide(NodeServices.layer)
+      )
+    ),
+    Effect.runPromise
+  );
+
+  strictEqual(error._tag, "VcsError");
+  strictEqual(error.reason, "AuthenticationRequired");
+  match(error.message, /authentication is required to comment/iu);
+});
+
+test("listPullRequestReviewThreads fails when nested comments are truncated", async () => {
+  const previous = process.env.GITHUB_TOKEN;
+  process.env.GITHUB_TOKEN = "test-token";
+
+  const FakeHttpLive = Layer.succeed(
+    HttpClient.HttpClient,
+    makeRecordingHttpClient(() =>
+      Response.json(
+        {
+          data: {
+            repository: {
+              pullRequest: {
+                reviewThreads: {
+                  nodes: [
+                    {
+                      comments: {
+                        nodes: [
+                          {
+                            author: { login: "akshat" },
+                            body: "first",
+                            createdAt: "2026-08-11T00:00:00Z",
+                            databaseId: 1,
+                            id: "COMMENT_1",
+                            replyTo: null,
+                          },
+                        ],
+                        pageInfo: {
+                          endCursor: "cursor-1",
+                          hasNextPage: true,
+                        },
+                      },
+                      diffSide: "RIGHT",
+                      id: "THREAD_1",
+                      isOutdated: false,
+                      isResolved: false,
+                      line: 10,
+                      path: "src/a.ts",
+                      startLine: null,
+                    },
+                  ],
+                  pageInfo: {
+                    endCursor: null,
+                    hasNextPage: false,
+                  },
+                },
+              },
+            },
+          },
+        },
+        { status: 200 }
+      )
+    )
   );
 
   try {
     const error = await Effect.gen(function* () {
       const vcs = yield* VCSService;
       return yield* vcs
-        .createPullRequestReview(pullRequestRef, "abc", [
-          {
-            body: "comment",
-            line: 1,
-            path: "a.ts",
-            side: "RIGHT",
-          },
-        ])
+        .listPullRequestReviewThreads(pullRequestRef)
         .pipe(Effect.flip);
     }).pipe(
       Effect.provide(
         GithubLive.pipe(
+          Layer.provide(GithubAuthTestLive),
           Layer.provide(FakeHttpLive),
           Layer.provide(NodeServices.layer)
         )
@@ -151,19 +234,13 @@ test("createPullRequestReview requires authentication", async () => {
     );
 
     strictEqual(error._tag, "VcsError");
-    strictEqual(error.reason, "AuthenticationRequired");
-    match(error.message, /authentication is required to comment/iu);
+    strictEqual(error.reason, "Unsupported");
+    match(error.message, /more than 50 comments/iu);
   } finally {
-    if (previousToken === undefined) {
+    if (previous === undefined) {
       delete process.env.GITHUB_TOKEN;
     } else {
-      process.env.GITHUB_TOKEN = previousToken;
-    }
-
-    if (previousGhConfig === undefined) {
-      delete process.env.GH_CONFIG_DIR;
-    } else {
-      process.env.GH_CONFIG_DIR = previousGhConfig;
+      process.env.GITHUB_TOKEN = previous;
     }
   }
 });

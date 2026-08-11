@@ -1,12 +1,29 @@
-import { Effect, Option, Redacted, Stream } from "effect";
+import {
+  Config,
+  Context,
+  Effect,
+  Layer,
+  Option,
+  Redacted,
+  Stream,
+} from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
-const readGithubTokenFromEnv = Effect.sync(() => {
-  const token = process.env.GITHUB_TOKEN?.trim();
+const readGithubTokenFromEnv = Effect.gen(function* () {
+  const token = yield* Config.option(Config.redacted("GITHUB_TOKEN")).pipe(
+    Effect.orElseSucceed(() => Option.none())
+  );
 
-  return token !== undefined && token.length > 0
-    ? Option.some(Redacted.make(token))
-    : Option.none<Redacted.Redacted<string>>();
+  return Option.match(token, {
+    onNone: () => Option.none<Redacted.Redacted<string>>(),
+    onSome: (value) => {
+      const trimmed = Redacted.value(value).trim();
+
+      return trimmed.length > 0
+        ? Option.some(Redacted.make(trimmed))
+        : Option.none();
+    },
+  });
 });
 
 const readGhAuthToken = Effect.fn(
@@ -40,20 +57,38 @@ const readGhAuthToken = Effect.fn(
   ).pipe(Effect.catchCause(() => Effect.succeed(Option.none())))
 );
 
-/**
- * Resolves a GitHub token from `GITHUB_TOKEN` first, then the `gh` CLI.
- *
- * An explicit env token wins so private-repo access can override an ambient
- * `gh` login that does not have the needed repository permissions.
- */
-export const resolveGithubToken = Effect.fn(
-  "lazydiff/services/githubAuth/resolveGithubToken"
-)(function* () {
-  const fromEnv = yield* readGithubTokenFromEnv;
+const make = Effect.gen(function* () {
+  const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
-  if (Option.isSome(fromEnv)) {
-    return fromEnv;
-  }
+  /**
+   * Resolves a GitHub token from `GITHUB_TOKEN` first, then the `gh` CLI.
+   *
+   * An explicit env token wins so private-repo access can override an ambient
+   * `gh` login that does not have the needed repository permissions.
+   */
+  const resolveToken = Effect.fn("lazydiff/services/githubAuth/resolveToken")(
+    function* () {
+      const fromEnv = yield* readGithubTokenFromEnv;
 
-  return yield* readGhAuthToken();
+      if (Option.isSome(fromEnv)) {
+        return fromEnv;
+      }
+
+      return yield* readGhAuthToken().pipe(
+        Effect.provideService(
+          ChildProcessSpawner.ChildProcessSpawner,
+          childProcessSpawner
+        )
+      );
+    }
+  );
+
+  return { resolveToken };
 });
+
+export class GithubAuth extends Context.Service<
+  GithubAuth,
+  Effect.Success<typeof make>
+>()("lazydiff/services/githubAuth") {}
+
+export const GithubAuthLive = Layer.effect(GithubAuth, make);

@@ -1,5 +1,6 @@
 import { LazyDiffRpcs } from "@lazydiff/protocol";
 import type { GitChangeScope } from "@lazydiff/protocol";
+import type { FileDiffMetadata } from "@pierre/diffs";
 import { Duration, Effect, Layer, Result, Schedule, Stream } from "effect";
 import { Atom, AtomRpc } from "effect/unstable/reactivity";
 import {
@@ -14,6 +15,7 @@ import {
   gitChangeScopePreferenceOrder,
   resolvePreferredGitChangeScope,
 } from "@/lib/git-change-scope";
+import { parsePatchFileDiffs } from "@/lib/parse-patch-file-diffs";
 
 const webSocketUrl = Effect.sync(() => {
   const url = new URL("/ws", globalThis.location.href);
@@ -148,6 +150,17 @@ export const gitChangeScopeAutoSelectAtom = LazyDiffRpcClient.runtime.atom(
     })
 );
 
+export interface GitDiffState {
+  readonly complete: boolean;
+  readonly fileDiffs: readonly FileDiffMetadata[];
+  /** Increments per resync so consumers can reset view state. */
+  readonly generation: number;
+}
+
+/**
+ * Parses each streamed batch once and accumulates the result. Atom stream atoms
+ * only keep the latest emission, so the accumulated list travels with it.
+ */
 export const gitDiffAtom = LazyDiffRpcClient.runtime.atom((get) =>
   Stream.unwrap(
     Effect.gen(function* subscribeToGitDiff() {
@@ -155,7 +168,29 @@ export const gitDiffAtom = LazyDiffRpcClient.runtime.atom((get) =>
       return client("git.diff.subscribe", {
         data: { scope: get(gitChangeScopeAtom) },
         type: "git.diff.subscribe",
-      });
+      }).pipe(
+        Stream.mapAccum(
+          (): GitDiffState => ({
+            complete: false,
+            fileDiffs: [],
+            generation: 0,
+          }),
+          (state, message) => {
+            const parsed = parsePatchFileDiffs(message.data.patch);
+            const next: GitDiffState = {
+              complete: message.data.complete,
+              fileDiffs: message.data.reset
+                ? parsed
+                : [...state.fileDiffs, ...parsed],
+              generation: message.data.reset
+                ? state.generation + 1
+                : state.generation,
+            };
+
+            return [next, [next]] as const;
+          }
+        )
+      );
     })
   ).pipe(Stream.retry(rpcRetrySchedule))
 );

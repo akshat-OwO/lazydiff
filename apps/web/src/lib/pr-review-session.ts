@@ -15,10 +15,52 @@ export interface PersistedPrReviewSession {
 
 export const prReviewSessionActiveAtom = Atom.make(false);
 
+/**
+ * Head commit SHA the active local review session was started against. Send to
+ * remote is only safe while this matches the opened pull request head.
+ */
+export const prReviewSessionHeadShaAtom = Atom.make<string | null>(null);
+
 const storageKeyFor = (
   pullRequest: Pick<GitPullRequestMeta, "owner" | "repo" | "number">
 ) =>
   `lazydiff-pr-review:${pullRequest.owner}/${pullRequest.repo}#${pullRequest.number}`;
+
+/**
+ * Saved annotation coordinates are only sendable against the same PR head they
+ * were captured on.
+ */
+export const prReviewSessionMatchesHead = (
+  session: Pick<PersistedPrReviewSession, "headSha">,
+  headSha: string
+): boolean => session.headSha === headSha;
+
+export type PrReviewSessionRestoreDecision =
+  | { readonly _tag: "inactive" }
+  | {
+      readonly _tag: "restore";
+      readonly session: PersistedPrReviewSession;
+    }
+  | { readonly _tag: "stale" };
+
+/**
+ * Decide whether a persisted session may be restored for the opened PR head.
+ * A head mismatch must discard sendable coordinates rather than keep them live.
+ */
+export const decidePrReviewSessionRestore = (
+  stored: PersistedPrReviewSession | null,
+  headSha: string
+): PrReviewSessionRestoreDecision => {
+  if (stored === null) {
+    return { _tag: "inactive" };
+  }
+
+  if (!prReviewSessionMatchesHead(stored, headSha)) {
+    return { _tag: "stale" };
+  }
+
+  return { _tag: "restore", session: stored };
+};
 
 const isAnnotationSide = (value: unknown): value is "additions" | "deletions" =>
   value === "additions" || value === "deletions";
@@ -126,16 +168,18 @@ export const readPrReviewSession = (
 export const writePrReviewSession = (
   pullRequest: GitPullRequestMeta,
   annotations: readonly DiffAnnotation[],
-  sentAnnotationIds: ReadonlySet<string>
+  sentAnnotationIds: ReadonlySet<string>,
+  sessionHeadSha: string = pullRequest.headSha
 ): void => {
+  const existing = readPrReviewSession(pullRequest);
   const session: PersistedPrReviewSession = {
     annotations,
-    headSha: pullRequest.headSha,
+    headSha: sessionHeadSha,
     number: pullRequest.number,
     owner: pullRequest.owner,
     repo: pullRequest.repo,
     sentAnnotationIds: [...sentAnnotationIds],
-    startedAt: new Date().toISOString(),
+    startedAt: existing?.startedAt ?? new Date().toISOString(),
   };
 
   try {

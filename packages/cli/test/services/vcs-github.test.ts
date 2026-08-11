@@ -1,36 +1,51 @@
-import { deepStrictEqual, match, ok, strictEqual } from "node:assert";
+import { match, ok, strictEqual } from "node:assert";
 import { test } from "node:test";
 
 import { NodeServices } from "@effect/platform-node";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Stream } from "effect";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 
+import { GithubAuthLive } from "../../src/services/github-auth.ts";
 import { GithubLive } from "../../src/services/vcs-github.ts";
 import { VCSService } from "../../src/services/vcs.ts";
 
+const GithubAuthTestLive = GithubAuthLive.pipe(
+  Layer.provide(NodeServices.layer)
+);
+
 const GithubTestLive = GithubLive.pipe(
+  Layer.provide(GithubAuthTestLive),
   Layer.provide(FetchHttpClient.layer),
   Layer.provide(NodeServices.layer)
 );
 
-test("GithubLive fetches a public pull request diff", async () => {
-  const review = await Effect.gen(function* () {
+test("GithubLive opens a public pull request and streams its files", async () => {
+  const { batches, session } = await Effect.gen(function* () {
     const vcs = yield* VCSService;
-    return yield* vcs.fetchPullRequest(
+    const opened = yield* vcs.openPullRequest(
       "https://github.com/akshat-OwO/weave/pull/1"
     );
+
+    return {
+      batches: yield* Stream.runCollect(opened.fileBatches),
+      session: opened,
+    };
   }).pipe(Effect.provide(GithubTestLive), Effect.runPromise);
 
-  strictEqual(review.owner, "akshat-OwO");
-  strictEqual(review.repo, "weave");
-  strictEqual(review.number, 1);
-  strictEqual(review.baseRefName, "main");
-  ok(review.headRefName.length > 0);
-  ok(review.title.length > 0);
-  ok(review.entries.length > 0);
-  ok(review.patch.includes("diff --git"));
-  deepStrictEqual(
-    review.entries.some((entry) => entry.path === "README.md"),
+  strictEqual(session.owner, "akshat-OwO");
+  strictEqual(session.repo, "weave");
+  strictEqual(session.number, 1);
+  strictEqual(session.baseRefName, "main");
+  ok(session.headRefName.length > 0);
+  ok(session.title.length > 0);
+
+  const entries = batches.flatMap((batch) => batch.entries);
+  const patch = batches.map((batch) => batch.patch).join("");
+
+  ok(entries.length > 0);
+  ok(patch.includes("diff --git"));
+  strictEqual(
+    entries.some((entry) => entry.path === "README.md"),
     true
   );
 });
@@ -39,7 +54,7 @@ test("GithubLive rejects unsupported pull request URLs", async () => {
   const error = await Effect.gen(function* () {
     const vcs = yield* VCSService;
     return yield* vcs
-      .fetchPullRequest("https://example.com/not-a-pr")
+      .openPullRequest("https://example.com/not-a-pr")
       .pipe(Effect.flip);
   }).pipe(Effect.provide(GithubTestLive), Effect.runPromise);
 
