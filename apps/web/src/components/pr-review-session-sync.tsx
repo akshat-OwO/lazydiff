@@ -3,9 +3,9 @@ import { useEffect, useRef } from "react";
 
 import { annotationsAtom, sentAnnotationIdsAtom } from "@/lib/annotations";
 import {
+  decidePrReviewSessionRestore,
   prReviewSessionActiveAtom,
   prReviewSessionHeadShaAtom,
-  prReviewSessionMatchesHead,
   readPrReviewSession,
   writePrReviewSession,
 } from "@/lib/pr-review-session";
@@ -40,28 +40,35 @@ function PrReviewSessionSync() {
     }
 
     const key = `${pullRequest.owner}/${pullRequest.repo}#${pullRequest.number}@${pullRequest.headSha}`;
+    const previousKey = restoredKeyRef.current;
 
-    if (restoredKeyRef.current === key) {
+    if (previousKey === key) {
       return;
     }
 
     restoredKeyRef.current = key;
-    const stored = readPrReviewSession(pullRequest);
+    const decision = decidePrReviewSessionRestore(
+      readPrReviewSession(pullRequest),
+      pullRequest.headSha
+    );
 
-    if (
-      stored === null ||
-      !prReviewSessionMatchesHead(stored, pullRequest.headSha)
-    ) {
-      // Stale coordinates from an older head must not become sendable.
-      setSessionActive(false);
-      setSessionHeadSha(null);
+    if (decision._tag === "restore") {
+      setSessionActive(true);
+      setSessionHeadSha(decision.session.headSha);
+      setAnnotations(decision.session.annotations);
+      setSentAnnotationIds(new Set(decision.session.sentAnnotationIds));
       return;
     }
 
-    setSessionActive(true);
-    setSessionHeadSha(stored.headSha);
-    setAnnotations(stored.annotations);
-    setSentAnnotationIds(new Set(stored.sentAnnotationIds));
+    setSessionActive(false);
+    setSessionHeadSha(null);
+
+    // A head change or stale persisted session must not leave old coordinates
+    // sendable against the newly opened head.
+    if (decision._tag === "stale" || previousKey !== null) {
+      setAnnotations([]);
+      setSentAnnotationIds(new Set());
+    }
   }, [
     pullRequest,
     setAnnotations,

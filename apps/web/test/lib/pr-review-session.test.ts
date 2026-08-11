@@ -4,6 +4,7 @@ import { test } from "node:test";
 import type { DiffAnnotation } from "../../src/lib/annotations.ts";
 import {
   clearPrReviewSession,
+  decidePrReviewSessionRestore,
   prReviewSessionMatchesHead,
   readPrReviewSession,
   writePrReviewSession,
@@ -109,4 +110,33 @@ test("writePrReviewSession keeps the session head when the live PR head moves", 
   const stored = readPrReviewSession(pullRequest);
   strictEqual(stored?.headSha, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
   deepStrictEqual(stored?.sentAnnotationIds, ["annotation-1"]);
+});
+
+test("decidePrReviewSessionRestore discards sessions from another head", () => {
+  installMemoryLocalStorage();
+  clearPrReviewSession(pullRequest);
+  writePrReviewSession(
+    pullRequest,
+    [annotation],
+    new Set(["annotation-1"]),
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  );
+
+  const stored = readPrReviewSession(pullRequest);
+  deepStrictEqual(decidePrReviewSessionRestore(stored, pullRequest.headSha), {
+    _tag: "stale",
+  });
+  deepStrictEqual(
+    decidePrReviewSessionRestore(
+      stored,
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ),
+    {
+      _tag: "restore",
+      session: stored,
+    }
+  );
+  deepStrictEqual(decidePrReviewSessionRestore(null, pullRequest.headSha), {
+    _tag: "inactive",
+  });
 });

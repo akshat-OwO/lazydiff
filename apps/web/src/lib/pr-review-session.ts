@@ -35,6 +35,33 @@ export const prReviewSessionMatchesHead = (
   headSha: string
 ): boolean => session.headSha === headSha;
 
+export type PrReviewSessionRestoreDecision =
+  | { readonly _tag: "inactive" }
+  | {
+      readonly _tag: "restore";
+      readonly session: PersistedPrReviewSession;
+    }
+  | { readonly _tag: "stale" };
+
+/**
+ * Decide whether a persisted session may be restored for the opened PR head.
+ * A head mismatch must discard sendable coordinates rather than keep them live.
+ */
+export const decidePrReviewSessionRestore = (
+  stored: PersistedPrReviewSession | null,
+  headSha: string
+): PrReviewSessionRestoreDecision => {
+  if (stored === null) {
+    return { _tag: "inactive" };
+  }
+
+  if (!prReviewSessionMatchesHead(stored, headSha)) {
+    return { _tag: "stale" };
+  }
+
+  return { _tag: "restore", session: stored };
+};
+
 const isAnnotationSide = (value: unknown): value is "additions" | "deletions" =>
   value === "additions" || value === "deletions";
 
