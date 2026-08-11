@@ -486,7 +486,6 @@ function ChangedFilesDiffs() {
   const codeViewOptions = useMemo(
     () => ({
       diffStyle: "unified" as const,
-      disableFileHeader: true as const,
       enableGutterUtility: true as const,
       enableLineSelection: true as const,
       hunkSeparators: "line-info-basic" as const,
