@@ -11,16 +11,23 @@ export function parsePatchFileDiffs(patch: string): FileDiffMetadata[] {
     return [];
   }
 
-  return parsePatchFiles(patch)
-    .flatMap(({ files }) => files)
-    .map((fileDiff) => {
+  const fileDiffs: FileDiffMetadata[] = [];
+
+  for (const { files } of parsePatchFiles(patch)) {
+    for (const fileDiff of files) {
+      // The parser keeps the pathname exactly as the patch header
+      // spells it, which the tree and the hash cannot match.
       fileDiff.name = unquoteGitPath(fileDiff.name);
 
       if (fileDiff.prevName !== undefined) {
         fileDiff.prevName = unquoteGitPath(fileDiff.prevName);
       }
 
-      return fileDiff;
-    })
-    .toSorted((left, right) => left.name.localeCompare(right.name));
+      fileDiffs.push(fileDiff);
+    }
+  }
+
+  return fileDiffs.toSorted((left, right) =>
+    left.name.localeCompare(right.name)
+  );
 }
