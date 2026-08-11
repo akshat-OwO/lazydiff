@@ -5,25 +5,30 @@ import type {
   GitFileStatus,
   GitStatusEntry,
 } from "@lazydiff/protocol";
+import { Effect, Layer, Option, Schedule, Schema, Stream } from "effect";
 import type { Redacted } from "effect";
-import { Effect, Layer, Option, Schedule, Schema } from "effect";
 import type { HttpClientResponse } from "effect/unstable/http";
 import { Headers, HttpClient, HttpClientRequest } from "effect/unstable/http";
-import { ChildProcessSpawner } from "effect/unstable/process";
 
-import { resolveGithubToken } from "@/services/github-auth";
+import { diffBatchSize } from "@/lib/diff-batches";
+import { buildUnifiedPatchFromGithubFiles } from "@/lib/github-pull-request-patch";
 import {
   formatGithubPullRequestUrl,
   parseGithubPullRequestUrl,
-} from "@/services/github-pull-request-url";
+} from "@/lib/github-pull-request-url";
+import { GithubAuth } from "@/services/github-auth";
 import { VCSService, VcsError } from "@/services/vcs";
-import type { PullRequestRef, PullRequestReview } from "@/services/vcs";
+import type {
+  PullRequestFileBatch,
+  PullRequestRef,
+  PullRequestSession,
+} from "@/services/vcs";
 
 const githubApiVersion = "2022-11-28";
 const githubApiBaseUrl = "https://api.github.com";
 const githubGraphqlUrl = "https://api.github.com/graphql";
 const userAgent = "lazydiff";
-const maxFilePages = 50;
+const githubFilesPerPage = 100;
 const maxThreadPages = 20;
 
 const GithubPullRequest = Schema.Struct({
@@ -50,6 +55,7 @@ const GithubPullRequestFileStatus = Schema.Literals([
 
 const GithubPullRequestFile = Schema.Struct({
   filename: Schema.String,
+  patch: Schema.optionalKey(Schema.String),
   previous_filename: Schema.optionalKey(Schema.String),
   status: GithubPullRequestFileStatus,
 });
@@ -521,100 +527,74 @@ const fetchPullRequestMetadata = (
     );
   });
 
-const fetchPullRequestFiles = (
+const fetchPullRequestFilePage = (
   client: HttpClient.HttpClient,
   hasToken: boolean,
-  ref: PullRequestRef
+  ref: PullRequestRef,
+  pageUrl: string
 ) =>
   Effect.gen(function* () {
-    const files: (typeof GithubPullRequestFile.Type)[] = [];
-    let pageUrl: string | undefined =
-      `${githubApiBaseUrl}/repos/${ref.owner}/${ref.repo}/pulls/${ref.number}/files?per_page=100`;
-
-    for (
-      let page = 0;
-      page < maxFilePages && pageUrl !== undefined;
-      page += 1
-    ) {
-      const response = yield* getOkResponse(client, hasToken, ref, pageUrl, {
-        accept: "application/vnd.github+json",
-      });
-      const json = yield* response.json.pipe(
-        Effect.mapError(
-          (error) =>
-            new VcsError({
-              message: `Unable to read GitHub pull request files: ${error.message}`,
-              reason: "DecodeError",
-            })
-        )
-      );
-      const pageFiles = yield* decodePullRequestFiles(json).pipe(
-        Effect.mapError(
-          (error) =>
-            new VcsError({
-              message: `Unable to decode GitHub pull request files: ${error.message}`,
-              reason: "DecodeError",
-            })
-        )
-      );
-
-      files.push(...pageFiles);
-      pageUrl = nextLinkUrl(Headers.get(response.headers, "link"));
-    }
-
-    if (pageUrl !== undefined) {
-      return yield* Effect.fail(
-        new VcsError({
-          message: `Pull request ${formatGithubPullRequestUrl(ref)} has too many changed files to load.`,
-          reason: "Unsupported",
-        })
-      );
-    }
-
-    return files;
-  });
-
-const fetchPullRequestDiff = (
-  client: HttpClient.HttpClient,
-  hasToken: boolean,
-  ref: PullRequestRef
-) =>
-  Effect.gen(function* () {
-    const response = yield* getOkResponse(
-      client,
-      hasToken,
-      ref,
-      `${githubApiBaseUrl}/repos/${ref.owner}/${ref.repo}/pulls/${ref.number}`,
-      {
-        accept: "application/vnd.github.diff",
-      }
-    );
-
-    return yield* response.text.pipe(
+    const response = yield* getOkResponse(client, hasToken, ref, pageUrl, {
+      accept: "application/vnd.github+json",
+    });
+    const json = yield* response.json.pipe(
       Effect.mapError(
         (error) =>
           new VcsError({
-            message: `Unable to read GitHub pull request diff: ${error.message}`,
+            message: `Unable to read GitHub pull request files: ${error.message}`,
             reason: "DecodeError",
           })
       )
     );
-  });
-
-const make = Effect.gen(function* () {
-  const httpClient = yield* HttpClient.HttpClient;
-  const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-
-  const resolveToken = () =>
-    resolveGithubToken().pipe(
-      Effect.provideService(
-        ChildProcessSpawner.ChildProcessSpawner,
-        childProcessSpawner
+    const files = yield* decodePullRequestFiles(json).pipe(
+      Effect.mapError(
+        (error) =>
+          new VcsError({
+            message: `Unable to decode GitHub pull request files: ${error.message}`,
+            reason: "DecodeError",
+          })
       )
     );
 
-  const fetchPullRequest = Effect.fn(
-    "lazydiff/services/vcsGithub/fetchPullRequest"
+    return {
+      files,
+      nextPageUrl: nextLinkUrl(Headers.get(response.headers, "link")),
+    };
+  });
+
+/**
+ * Streams every changed file, one page request at a time, so review can start
+ * before the whole pull request has been downloaded.
+ */
+const pullRequestFileStream = (
+  client: HttpClient.HttpClient,
+  hasToken: boolean,
+  ref: PullRequestRef,
+  pageUrl: string
+): Stream.Stream<typeof GithubPullRequestFile.Type, VcsError> =>
+  Stream.unwrap(
+    fetchPullRequestFilePage(client, hasToken, ref, pageUrl).pipe(
+      Effect.map(({ files, nextPageUrl }) => {
+        const page = Stream.fromIterable(files);
+
+        return nextPageUrl === undefined
+          ? page
+          : Stream.concat(
+              page,
+              Stream.suspend(() =>
+                pullRequestFileStream(client, hasToken, ref, nextPageUrl)
+              )
+            );
+      })
+    )
+  );
+
+const make = Effect.gen(function* () {
+  const httpClient = yield* HttpClient.HttpClient;
+  const githubAuth = yield* GithubAuth;
+
+  const openPullRequest = Effect.fn(
+    "lazydiff/services/vcsGithub/openPullRequest"
   )(function* (url: string) {
     const ref = yield* parseGithubPullRequestUrl(url).pipe(
       Option.match({
@@ -628,16 +608,23 @@ const make = Effect.gen(function* () {
         onSome: Effect.succeed,
       })
     );
-    const token = yield* resolveToken();
+    const token = yield* githubAuth.resolveToken();
     const client = makeAuthedClient(httpClient, token);
     const hasToken = Option.isSome(token);
-    const [metadata, files, patch] = yield* Effect.all(
-      [
-        fetchPullRequestMetadata(client, hasToken, ref),
-        fetchPullRequestFiles(client, hasToken, ref),
-        fetchPullRequestDiff(client, hasToken, ref),
-      ],
-      { concurrency: "unbounded" }
+    const metadata = yield* fetchPullRequestMetadata(client, hasToken, ref);
+    const fileBatches = pullRequestFileStream(
+      client,
+      hasToken,
+      ref,
+      `${githubApiBaseUrl}/repos/${ref.owner}/${ref.repo}/pulls/${ref.number}/files?per_page=${githubFilesPerPage}`
+    ).pipe(
+      Stream.grouped(diffBatchSize),
+      Stream.map(
+        (files): PullRequestFileBatch => ({
+          entries: mapGithubFiles(files),
+          patch: buildUnifiedPatchFromGithubFiles(files),
+        })
+      )
     );
 
     if (metadata.head.sha.trim().length === 0) {
@@ -649,20 +636,19 @@ const make = Effect.gen(function* () {
       );
     }
 
-    const review: PullRequestReview = {
+    const session: PullRequestSession = {
       baseRefName: metadata.base.ref,
-      entries: mapGithubFiles(files),
+      fileBatches,
       headRefName: metadata.head.ref,
       headSha: metadata.head.sha,
       number: metadata.number,
       owner: ref.owner,
-      patch,
       repo: ref.repo,
       title: metadata.title,
       url: formatGithubPullRequestUrl(ref),
     };
 
-    return review;
+    return session;
   });
 
   const createPullRequestReview = Effect.fn(
@@ -673,7 +659,7 @@ const make = Effect.gen(function* () {
     comments: readonly GithubPrReviewCommentInput[]
   ) {
     const pullRequestUrl = formatGithubPullRequestUrl(ref);
-    const token = yield* resolveToken();
+    const token = yield* githubAuth.resolveToken();
     yield* requireToken(token, ref, "comment on");
     const client = makeAuthedClient(httpClient, token);
     const response = yield* postJson(
@@ -804,7 +790,7 @@ const make = Effect.gen(function* () {
     "lazydiff/services/vcsGithub/listPullRequestReviewThreads"
   )(function* (ref: PullRequestRef) {
     const pullRequestUrl = formatGithubPullRequestUrl(ref);
-    const token = yield* resolveToken();
+    const token = yield* githubAuth.resolveToken();
     yield* requireToken(token, ref, "read review comments on");
     const client = makeAuthedClient(httpClient, token);
     const threads: GithubPrReviewThread[] = [];
@@ -837,7 +823,7 @@ const make = Effect.gen(function* () {
     "lazydiff/services/vcsGithub/replyToPullRequestReviewComment"
   )(function* (ref: PullRequestRef, commentId: number, body: string) {
     const pullRequestUrl = formatGithubPullRequestUrl(ref);
-    const token = yield* resolveToken();
+    const token = yield* githubAuth.resolveToken();
     yield* requireToken(token, ref, "reply on");
     const client = makeAuthedClient(httpClient, token);
     const response = yield* postJson(
@@ -880,7 +866,7 @@ const make = Effect.gen(function* () {
     "lazydiff/services/vcsGithub/setPullRequestReviewThreadResolved"
   )(function* (ref: PullRequestRef, threadId: string, resolved: boolean) {
     const pullRequestUrl = formatGithubPullRequestUrl(ref);
-    const token = yield* resolveToken();
+    const token = yield* githubAuth.resolveToken();
     yield* requireToken(token, ref, "update review threads on");
     const client = makeAuthedClient(httpClient, token);
     const response = yield* postJson(
@@ -940,8 +926,8 @@ const make = Effect.gen(function* () {
 
   return {
     createPullRequestReview,
-    fetchPullRequest,
     listPullRequestReviewThreads,
+    openPullRequest,
     replyToPullRequestReviewComment,
     setPullRequestReviewThreadResolved,
   };

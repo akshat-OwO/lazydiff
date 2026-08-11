@@ -8,7 +8,10 @@ import {
   withAvailableListenPort,
 } from "@/services/listen-port";
 import { makePrGitLive } from "@/services/pr-git";
-import { makePullRequestSessionLive } from "@/services/pull-request-session";
+import {
+  makePullRequestContextLive,
+  openedPullRequestFromSession,
+} from "@/services/pull-request-session";
 import {
   formatStartupOutput,
   shouldShowHttpLogs,
@@ -131,17 +134,19 @@ export const commands = Command.make(
   Effect.fnUntraced(function* ({ noBrowser, pr }) {
     if (Option.isSome(pr)) {
       const vcs = yield* VCSService;
-      const pullRequest = yield* vcs.fetchPullRequest(pr.value);
+      const session = yield* vcs.openPullRequest(pr.value);
 
       yield* Console.log(
-        `Loaded pull request ${pullRequest.url} (${pullRequest.title})`
+        `Reviewing pull request ${session.url} (${session.title})`
       );
 
       return yield* runReviewServer({ noBrowser }).pipe(
         Effect.provide(
           Layer.merge(
-            makePrGitLive(pullRequest),
-            makePullRequestSessionLive(Option.some(pullRequest))
+            makePrGitLive(session),
+            makePullRequestContextLive(
+              Option.some(openedPullRequestFromSession(session))
+            )
           )
         )
       );
@@ -149,7 +154,7 @@ export const commands = Command.make(
 
     return yield* runReviewServer({ noBrowser }).pipe(
       Effect.provide(
-        Layer.merge(GitLive, makePullRequestSessionLive(Option.none()))
+        Layer.merge(GitLive, makePullRequestContextLive(Option.none()))
       )
     );
   })
