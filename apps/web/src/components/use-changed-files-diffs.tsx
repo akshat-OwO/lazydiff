@@ -4,7 +4,6 @@ import type {
   CodeViewDiffItem,
   CodeViewItem,
   DiffLineAnnotation,
-  FileDiffMetadata,
   SelectedLineRange,
 } from "@pierre/diffs";
 import type { CodeViewHandle } from "@pierre/diffs/react";
@@ -15,10 +14,10 @@ import type { ReactNode } from "react";
 
 import { AnnotationDraftForm } from "@/components/annotation-draft-form";
 import {
+  collectDiffLineAnnotationsByFile,
   emptyFileDiffs,
   gutterUtilityCSS,
-  remoteThreadLineAnnotation,
-  remoteThreadsForFilePath,
+  resolveAnnotationRenderTarget,
   resolveCodeViewItem,
 } from "@/components/changed-files-diffs-helpers";
 import type { AnnotationMetadata } from "@/components/changed-files-diffs-helpers";
@@ -32,10 +31,8 @@ import {
 import {
   annotationDraftAtom,
   annotationFocusAtom,
-  annotationMatchesFileDiff,
   annotationsAtom,
   annotationsForScope,
-  draftMatchesFileDiff,
 } from "@/lib/annotations";
 import type { DiffAnnotation } from "@/lib/annotations";
 import {
@@ -146,73 +143,17 @@ const useChangedFilesDiffs = () => {
    * Only annotated files land in this map, so the per-file lookup below stays a
    * reference comparison for the thousands of files that carry no annotations.
    */
-  const annotationsByFile = useMemo(() => {
-    const map = new Map<
-      FileDiffMetadata,
-      DiffLineAnnotation<AnnotationMetadata>[]
-    >();
-
-    const append = (
-      fileDiff: FileDiffMetadata,
-      annotation: DiffLineAnnotation<AnnotationMetadata>
-    ) => {
-      const existing = map.get(fileDiff);
-
-      if (existing === undefined) {
-        map.set(fileDiff, [annotation]);
-        return;
-      }
-
-      existing.push(annotation);
-    };
-
-    if (
-      scopedAnnotations.length > 0 ||
-      draft !== null ||
-      remoteThreads.length > 0
-    ) {
-      for (const fileDiff of fileDiffs) {
-        for (const annotation of scopedAnnotations) {
-          if (!annotationMatchesFileDiff(annotation, fileDiff)) {
-            continue;
-          }
-
-          const anchor = annotationAnchorForRange(annotation.range);
-          append(fileDiff, {
-            lineNumber: anchor.lineNumber,
-            metadata: { annotationId: annotation.id, kind: "saved" },
-            side: anchor.side,
-          });
-        }
-
-        for (const thread of remoteThreadsForFilePath(
-          remoteThreads,
-          fileDiff.name
-        )) {
-          const remoteAnnotation = remoteThreadLineAnnotation(thread);
-
-          if (remoteAnnotation !== undefined) {
-            append(fileDiff, remoteAnnotation);
-          }
-        }
-
-        if (
-          draft !== null &&
-          draft.scope === scope &&
-          draft.filePath === fileDiff.name &&
-          draftMatchesFileDiff(draft, fileDiff)
-        ) {
-          append(fileDiff, {
-            lineNumber: draft.lineNumber,
-            metadata: { kind: "draft" },
-            side: draft.side,
-          });
-        }
-      }
-    }
-
-    return map;
-  }, [draft, fileDiffs, remoteThreads, scope, scopedAnnotations]);
+  const annotationsByFile = useMemo(
+    () =>
+      collectDiffLineAnnotationsByFile({
+        draft,
+        fileDiffs,
+        remoteThreads,
+        scope,
+        scopedAnnotations,
+      }),
+    [draft, fileDiffs, remoteThreads, scope, scopedAnnotations]
+  );
 
   const items = useMemo(
     () =>
@@ -423,38 +364,41 @@ const useChangedFilesDiffs = () => {
         return null;
       }
 
-      if (annotation.metadata.kind === "draft") {
-        return draft !== null &&
+      const target = resolveAnnotationRenderTarget(annotation.metadata, {
+        annotationsById,
+        draft:
+          draft !== null &&
           draft.filePath === item.fileDiff.name &&
-          draft.scope === scope ? (
-          <AnnotationDraftForm draft={draft} />
-        ) : null;
+          draft.scope === scope
+            ? draft
+            : null,
+        remoteThreadsById,
+      });
+
+      if (target._tag === "draft") {
+        return <AnnotationDraftForm draft={target.draft} />;
       }
 
-      if (annotation.metadata.kind === "remote") {
-        const thread = remoteThreadsById.get(annotation.metadata.threadId);
-
-        return thread === undefined ? null : (
+      if (target._tag === "remote") {
+        return (
           <RemoteReviewThread
-            key={`${thread.id}:${thread.isResolved ? "resolved" : "open"}`}
-            thread={thread}
+            key={`${target.thread.id}:${target.thread.isResolved ? "resolved" : "open"}`}
+            thread={target.thread}
           />
         );
       }
 
-      const saved = annotationsById.get(annotation.metadata.annotationId);
-
-      if (saved === undefined) {
-        return null;
+      if (target._tag === "saved") {
+        return (
+          <InlineAnnotationComment
+            annotationId={target.annotation.id}
+            comment={target.annotation.comment}
+            number={target.number}
+          />
+        );
       }
 
-      return (
-        <InlineAnnotationComment
-          annotationId={saved.annotation.id}
-          comment={saved.annotation.comment}
-          number={saved.number}
-        />
-      );
+      return null;
     },
     [annotationsById, draft, remoteThreadsById, scope]
   );
