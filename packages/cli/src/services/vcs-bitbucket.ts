@@ -1189,10 +1189,21 @@ export const makeBitbucketVcs = Effect.gen(function* () {
       };
     }
 
-    // 404 means there is no resolution to clear (already open).
-    yield* deleteOk(client, true, ref, resolveUrl, "comment", {
+    // 404 can mean either "already open" or "comment does not exist". Confirm
+    // the comment is still present before treating this as idempotent success.
+    const response = yield* deleteOk(client, true, ref, resolveUrl, "comment", {
       acceptStatuses: new Set([404]),
     });
+
+    if (response.status === 404) {
+      yield* getOkResponse(
+        client,
+        true,
+        ref,
+        `${apiPullRequestPath(ref)}/comments/${commentId}`
+      );
+    }
+
     return { isResolved: false };
   });
 

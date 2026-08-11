@@ -401,6 +401,7 @@ test("setPullRequestReviewThreadResolved treats already-resolved Bitbucket threa
 
 test("setPullRequestReviewThreadResolved treats already-open Bitbucket threads as success", async () => {
   let resolveDeletes = 0;
+  let commentGets = 0;
 
   const FakeHttpLive = Layer.succeed(
     HttpClient.HttpClient,
@@ -417,6 +418,16 @@ test("setPullRequestReviewThreadResolved treats already-open Bitbucket threads a
           },
           { status: 404 }
         );
+      }
+
+      if (request.method === "GET" && request.url.endsWith("/comments/11")) {
+        commentGets += 1;
+        return Response.json({
+          content: { raw: "open thread" },
+          created_on: "2026-08-10T00:00:00.000000+00:00",
+          id: 11,
+          resolution: null,
+        });
       }
 
       return new Response("unused", { status: 500 });
@@ -442,5 +453,61 @@ test("setPullRequestReviewThreadResolved treats already-open Bitbucket threads a
   );
 
   strictEqual(resolveDeletes, 1);
+  strictEqual(commentGets, 1);
   strictEqual(result.isResolved, false);
+});
+
+test("setPullRequestReviewThreadResolved fails when unresolving a missing Bitbucket comment", async () => {
+  let resolveDeletes = 0;
+  let commentGets = 0;
+
+  const FakeHttpLive = Layer.succeed(
+    HttpClient.HttpClient,
+    makeRecordingHttpClient((request) => {
+      if (request.method === "DELETE" && request.url.endsWith("/resolve")) {
+        resolveDeletes += 1;
+        return Response.json(
+          {
+            error: { message: "11" },
+            type: "error",
+          },
+          { status: 404 }
+        );
+      }
+
+      if (request.method === "GET" && request.url.endsWith("/comments/11")) {
+        commentGets += 1;
+        return Response.json(
+          {
+            error: { message: "11" },
+            type: "error",
+          },
+          { status: 404 }
+        );
+      }
+
+      return new Response("unused", { status: 500 });
+    })
+  );
+
+  const error = await Effect.gen(function* () {
+    const vcs = yield* VCSService;
+    return yield* vcs
+      .setPullRequestReviewThreadResolved(pullRequestRef, "11", false)
+      .pipe(Effect.flip);
+  }).pipe(
+    Effect.provide(provideBitbucket(FakeHttpLive)),
+    Effect.provide(
+      bitbucketAuthConfig({
+        BITBUCKET_EMAIL: "dev@example.com",
+        BITBUCKET_TOKEN: "test-token",
+      })
+    ),
+    Effect.runPromise
+  );
+
+  strictEqual(resolveDeletes, 1);
+  strictEqual(commentGets, 1);
+  strictEqual(error._tag, "VcsError");
+  strictEqual(error.reason, "NotFound");
 });
