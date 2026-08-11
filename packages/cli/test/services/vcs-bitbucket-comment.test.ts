@@ -1,4 +1,4 @@
-import { match, ok, strictEqual } from "node:assert";
+import { deepStrictEqual, match, ok, strictEqual } from "node:assert";
 import { test } from "node:test";
 
 import { ConfigProvider, Effect, Layer } from "effect";
@@ -23,6 +23,8 @@ const pullRequestRef: PullRequestRef = {
   repo: "demo",
 };
 
+const headSha = "0123456789abcdef0123456789abcdef01234567";
+
 const makeRecordingHttpClient = (
   handler: (request: HttpClientRequest.HttpClientRequest) => Response
 ): HttpClient.HttpClient =>
@@ -40,12 +42,34 @@ const decodeRequestBody = (
   return JSON.parse(new TextDecoder().decode(request.body.body)) as unknown;
 };
 
+const pullRequestMetadataResponse = (sha: string) =>
+  Response.json({
+    destination: { branch: { name: "main" } },
+    id: 3,
+    links: {
+      html: {
+        href: "https://bitbucket.org/acme/demo/pull-requests/3",
+      },
+    },
+    source: {
+      branch: { name: "feature" },
+      commit: { hash: sha },
+    },
+    title: "Demo",
+  });
+
 test("createPullRequestReview posts inline Bitbucket comments", async () => {
   let captured: HttpClientRequest.HttpClientRequest | undefined;
+  let metadataGets = 0;
 
   const FakeHttpLive = Layer.succeed(
     HttpClient.HttpClient,
     makeRecordingHttpClient((request) => {
+      if (request.method === "GET" && request.url.endsWith("/pullrequests/3")) {
+        metadataGets += 1;
+        return pullRequestMetadataResponse(headSha);
+      }
+
       captured = request;
       return Response.json(
         {
@@ -66,18 +90,14 @@ test("createPullRequestReview posts inline Bitbucket comments", async () => {
 
   const review = await Effect.gen(function* () {
     const vcs = yield* VCSService;
-    return yield* vcs.createPullRequestReview(
-      pullRequestRef,
-      "0123456789abcdef0123456789abcdef01234567",
-      [
-        {
-          body: "Looks good.",
-          line: 9,
-          path: "src/app.ts",
-          side: "RIGHT",
-        },
-      ]
-    );
+    return yield* vcs.createPullRequestReview(pullRequestRef, headSha, [
+      {
+        body: "Looks good.",
+        line: 9,
+        path: "src/app.ts",
+        side: "RIGHT",
+      },
+    ]);
   }).pipe(
     Effect.provide(provideBitbucket(FakeHttpLive)),
     Effect.provide(
@@ -89,6 +109,7 @@ test("createPullRequestReview posts inline Bitbucket comments", async () => {
     Effect.runPromise
   );
 
+  strictEqual(metadataGets, 1);
   strictEqual(
     review.htmlUrl,
     "https://bitbucket.org/acme/demo/pull-requests/3/_/diff#comment-42"
@@ -119,7 +140,7 @@ test("createPullRequestReview requires Bitbucket authentication", async () => {
   const error = await Effect.gen(function* () {
     const vcs = yield* VCSService;
     return yield* vcs
-      .createPullRequestReview(pullRequestRef, "abc", [
+      .createPullRequestReview(pullRequestRef, headSha, [
         {
           body: "comment",
           line: 1,
@@ -137,4 +158,157 @@ test("createPullRequestReview requires Bitbucket authentication", async () => {
   strictEqual(error._tag, "VcsError");
   strictEqual(error.reason, "AuthenticationRequired");
   match(error.message, /authentication is required to comment/iu);
+});
+
+test("createPullRequestReview does not retry transient mutation failures", async () => {
+  let commentPosts = 0;
+
+  const FakeHttpLive = Layer.succeed(
+    HttpClient.HttpClient,
+    makeRecordingHttpClient((request) => {
+      if (request.method === "GET" && request.url.endsWith("/pullrequests/3")) {
+        return pullRequestMetadataResponse(headSha);
+      }
+
+      if (request.method === "POST") {
+        commentPosts += 1;
+        return new Response("temporary failure", { status: 500 });
+      }
+
+      return new Response("unused", { status: 404 });
+    })
+  );
+
+  const error = await Effect.gen(function* () {
+    const vcs = yield* VCSService;
+    return yield* vcs
+      .createPullRequestReview(pullRequestRef, headSha, [
+        {
+          body: "Looks good.",
+          line: 9,
+          path: "src/app.ts",
+          side: "RIGHT",
+        },
+      ])
+      .pipe(Effect.flip);
+  }).pipe(
+    Effect.provide(provideBitbucket(FakeHttpLive)),
+    Effect.provide(
+      bitbucketAuthConfig({
+        BITBUCKET_EMAIL: "dev@example.com",
+        BITBUCKET_TOKEN: "test-token",
+      })
+    ),
+    Effect.runPromise
+  );
+
+  strictEqual(commentPosts, 1);
+  strictEqual(error._tag, "VcsError");
+  strictEqual(error.reason, "HttpError");
+});
+
+test("createPullRequestReview fails when the pull request head moved", async () => {
+  let commentPosts = 0;
+
+  const FakeHttpLive = Layer.succeed(
+    HttpClient.HttpClient,
+    makeRecordingHttpClient((request) => {
+      if (request.method === "GET" && request.url.endsWith("/pullrequests/3")) {
+        return pullRequestMetadataResponse(
+          "abcdef0123456789abcdef0123456789abcdef01"
+        );
+      }
+
+      if (request.method === "POST") {
+        commentPosts += 1;
+      }
+
+      return new Response("unused", { status: 500 });
+    })
+  );
+
+  const error = await Effect.gen(function* () {
+    const vcs = yield* VCSService;
+    return yield* vcs
+      .createPullRequestReview(pullRequestRef, headSha, [
+        {
+          body: "Looks good.",
+          line: 9,
+          path: "src/app.ts",
+          side: "RIGHT",
+        },
+      ])
+      .pipe(Effect.flip);
+  }).pipe(
+    Effect.provide(provideBitbucket(FakeHttpLive)),
+    Effect.provide(
+      bitbucketAuthConfig({
+        BITBUCKET_EMAIL: "dev@example.com",
+        BITBUCKET_TOKEN: "test-token",
+      })
+    ),
+    Effect.runPromise
+  );
+
+  strictEqual(commentPosts, 0);
+  strictEqual(error._tag, "VcsError");
+  strictEqual(error.reason, "Unsupported");
+  match(error.message, /head moved/iu);
+});
+
+test("listPullRequestReviewThreads includes nested Bitbucket replies", async () => {
+  const FakeHttpLive = Layer.succeed(
+    HttpClient.HttpClient,
+    makeRecordingHttpClient((request) => {
+      if (!request.url.includes("/comments")) {
+        return new Response("unused", { status: 404 });
+      }
+
+      return Response.json({
+        values: [
+          {
+            content: { raw: "root" },
+            created_on: "2026-08-10T00:00:00.000000+00:00",
+            id: 1,
+            inline: { from: null, path: "src/app.ts", to: 4 },
+            user: { nickname: "dev" },
+          },
+          {
+            content: { raw: "reply" },
+            created_on: "2026-08-10T00:01:00.000000+00:00",
+            id: 2,
+            parent: { id: 1 },
+            user: { nickname: "dev" },
+          },
+          {
+            content: { raw: "nested" },
+            created_on: "2026-08-10T00:02:00.000000+00:00",
+            id: 3,
+            parent: { id: 2 },
+            user: { nickname: "dev" },
+          },
+        ],
+      });
+    })
+  );
+
+  const threads = await Effect.gen(function* () {
+    const vcs = yield* VCSService;
+    return yield* vcs.listPullRequestReviewThreads(pullRequestRef);
+  }).pipe(
+    Effect.provide(provideBitbucket(FakeHttpLive)),
+    Effect.provide(
+      bitbucketAuthConfig({
+        BITBUCKET_EMAIL: "dev@example.com",
+        BITBUCKET_TOKEN: "test-token",
+      })
+    ),
+    Effect.runPromise
+  );
+
+  strictEqual(threads.length, 1);
+  deepStrictEqual(
+    threads[0]?.comments.map((comment) => comment.body),
+    ["root", "reply", "nested"]
+  );
 });

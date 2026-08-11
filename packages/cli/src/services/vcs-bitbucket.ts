@@ -10,6 +10,7 @@ import type { HttpClientResponse } from "effect/unstable/http";
 import { HttpClient, HttpClientRequest } from "effect/unstable/http";
 
 import { buildBitbucketPullRequestFileBatches } from "@/lib/bitbucket-pull-request-batches";
+import { assertBitbucketPullRequestDiffComplete } from "@/lib/bitbucket-pull-request-diff";
 import { BitbucketAuth } from "@/services/bitbucket-auth";
 import type { BitbucketCredentials } from "@/services/bitbucket-auth";
 import {
@@ -295,7 +296,10 @@ const mapComment = (
 
 const makeAuthedClient = (
   baseClient: HttpClient.HttpClient,
-  credentials: Option.Option<BitbucketCredentials>
+  credentials: Option.Option<BitbucketCredentials>,
+  options?: {
+    readonly retryTransient?: boolean;
+  }
 ) => {
   const withDefaults = HttpClient.mapRequest(
     baseClient,
@@ -305,7 +309,7 @@ const makeAuthedClient = (
     })
   );
 
-  return Option.match(credentials, {
+  const authenticated = Option.match(credentials, {
     onNone: () => withDefaults,
     onSome: (value) =>
       HttpClient.mapRequest(withDefaults, (request) =>
@@ -315,7 +319,15 @@ const makeAuthedClient = (
             HttpClientRequest.basicAuth(request, email, value.token),
         })
       ),
-  }).pipe(
+  });
+
+  // Mutations must not replay: a dropped 5xx/transport response can still have
+  // created the comment on Bitbucket's side.
+  if (options?.retryTransient === false) {
+    return authenticated;
+  }
+
+  return authenticated.pipe(
     HttpClient.retryTransient({
       schedule: Schedule.exponential("100 millis"),
       times: 2,
@@ -583,6 +595,75 @@ const fetchFullCommitHash = (
     return fullHash;
   });
 
+const fetchCurrentHeadSha = (
+  client: HttpClient.HttpClient,
+  hasCredentials: boolean,
+  ref: PullRequestRef
+) =>
+  Effect.gen(function* () {
+    const metadata = yield* fetchPullRequestMetadata(
+      client,
+      hasCredentials,
+      ref
+    );
+
+    return yield* fetchFullCommitHash(
+      client,
+      hasCredentials,
+      ref,
+      metadata.source.commit
+    );
+  });
+
+const requireMatchingHeadSha = (
+  client: HttpClient.HttpClient,
+  hasCredentials: boolean,
+  ref: PullRequestRef,
+  expectedHeadSha: string
+) =>
+  Effect.gen(function* () {
+    const currentHeadSha = yield* fetchCurrentHeadSha(
+      client,
+      hasCredentials,
+      ref
+    );
+
+    if (currentHeadSha.toLowerCase() === expectedHeadSha.toLowerCase()) {
+      return currentHeadSha;
+    }
+
+    return yield* Effect.fail(
+      new VcsError({
+        message: `Pull request ${formatBitbucketPullRequestUrl(ref)} head moved from ${expectedHeadSha} to ${currentHeadSha}. Refresh the review to continue.`,
+        reason: "Unsupported",
+      })
+    );
+  });
+
+const collectDescendantComments = (
+  rootId: number,
+  repliesByParent: ReadonlyMap<
+    number,
+    readonly (typeof BitbucketComment.Type)[]
+  >
+): (typeof BitbucketComment.Type)[] => {
+  const collected: (typeof BitbucketComment.Type)[] = [];
+  const pending = [...(repliesByParent.get(rootId) ?? [])];
+
+  while (pending.length > 0) {
+    const comment = pending.shift();
+
+    if (comment === undefined) {
+      break;
+    }
+
+    collected.push(comment);
+    pending.push(...(repliesByParent.get(comment.id) ?? []));
+  }
+
+  return collected;
+};
+
 const fetchPullRequestDiffstat = (
   client: HttpClient.HttpClient,
   hasCredentials: boolean,
@@ -791,10 +872,13 @@ export const makeBitbucketVcs = Effect.gen(function* () {
     const pullRequestUrl = formatBitbucketPullRequestUrl(ref);
 
     // Diffstat + unified patch load when the session stream is consumed so
-    // review metadata can be served immediately.
+    // review metadata can be served immediately. Re-check the PR head around
+    // those unpinned requests so a push cannot mix revisions into one session.
     const fileBatches: Stream.Stream<PullRequestFileBatch, VcsError> =
       Stream.unwrap(
         Effect.gen(function* () {
+          yield* requireMatchingHeadSha(client, hasCredentials, ref, headSha);
+
           const [diffstat, patch] = yield* Effect.all(
             [
               fetchPullRequestDiffstat(client, hasCredentials, ref),
@@ -803,8 +887,17 @@ export const makeBitbucketVcs = Effect.gen(function* () {
             { concurrency: "unbounded" }
           );
 
+          yield* requireMatchingHeadSha(client, hasCredentials, ref, headSha);
+
+          const entries = mapDiffstat(diffstat);
+          yield* assertBitbucketPullRequestDiffComplete(
+            entries,
+            patch,
+            pullRequestUrl
+          );
+
           return Stream.fromIterable(
-            buildBitbucketPullRequestFileBatches(mapDiffstat(diffstat), patch)
+            buildBitbucketPullRequestFileBatches(entries, patch)
           );
         })
       );
@@ -829,19 +922,23 @@ export const makeBitbucketVcs = Effect.gen(function* () {
     "lazydiff/services/vcsBitbucket/createPullRequestReview"
   )(function* (
     ref: PullRequestRef,
-    _commitId: string,
+    commitId: string,
     comments: readonly GithubPrReviewCommentInput[]
   ) {
     yield* requireBitbucketRef(ref);
     const pullRequestUrl = formatBitbucketPullRequestUrl(ref);
     const credentials = yield* bitbucketAuth.resolveCredentials();
     yield* requireCredentials(credentials, ref, "comment on");
-    const client = makeAuthedClient(httpClient, credentials);
+    const readClient = makeAuthedClient(httpClient, credentials);
+    yield* requireMatchingHeadSha(readClient, true, ref, commitId);
+    const mutationClient = makeAuthedClient(httpClient, credentials, {
+      retryTransient: false,
+    });
     let firstCommentHtmlUrl: string | undefined;
 
     for (const comment of comments) {
       const response = yield* postJson(
-        client,
+        mutationClient,
         true,
         ref,
         `${apiPullRequestPath(ref)}/comments`,
@@ -917,7 +1014,10 @@ export const makeBitbucketVcs = Effect.gen(function* () {
         continue;
       }
 
-      const replyComments = (repliesByParent.get(comment.id) ?? [])
+      const replyComments = collectDescendantComments(
+        comment.id,
+        repliesByParent
+      )
         .toSorted((left, right) =>
           left.created_on.localeCompare(right.created_on)
         )
@@ -945,7 +1045,9 @@ export const makeBitbucketVcs = Effect.gen(function* () {
     const pullRequestUrl = formatBitbucketPullRequestUrl(ref);
     const credentials = yield* bitbucketAuth.resolveCredentials();
     yield* requireCredentials(credentials, ref, "reply on");
-    const client = makeAuthedClient(httpClient, credentials);
+    const client = makeAuthedClient(httpClient, credentials, {
+      retryTransient: false,
+    });
     const response = yield* postJson(
       client,
       true,
@@ -1003,7 +1105,9 @@ export const makeBitbucketVcs = Effect.gen(function* () {
 
     const credentials = yield* bitbucketAuth.resolveCredentials();
     yield* requireCredentials(credentials, ref, "update review threads on");
-    const client = makeAuthedClient(httpClient, credentials);
+    const client = makeAuthedClient(httpClient, credentials, {
+      retryTransient: false,
+    });
     const resolveUrl = `${apiPullRequestPath(ref)}/comments/${commentId}/resolve`;
 
     if (resolved) {
