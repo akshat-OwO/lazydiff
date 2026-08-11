@@ -8,5 +8,6 @@ export class VcsError extends Data.TaggedError("VcsError")<{
     | "NotFound"
     | "HttpError"
     | "DecodeError"
-    | "Unsupported";
+    | "Unsupported"
+    | "Truncated";
 }> {}

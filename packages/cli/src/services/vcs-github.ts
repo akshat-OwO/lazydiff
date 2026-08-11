@@ -5,12 +5,13 @@ import type {
   GitFileStatus,
   GitStatusEntry,
 } from "@lazydiff/protocol";
-import { Effect, Layer, Option, Schedule, Schema, Stream } from "effect";
+import { Effect, Layer, Option, Ref, Schedule, Schema, Stream } from "effect";
 import type { Redacted } from "effect";
 import type { HttpClientResponse } from "effect/unstable/http";
 import { Headers, HttpClient, HttpClientRequest } from "effect/unstable/http";
 
 import { diffBatchSize } from "@/lib/diff-batches";
+import { assertPullRequestFilesComplete } from "@/lib/github-pull-request-files";
 import { buildUnifiedPatchFromGithubFiles } from "@/lib/github-pull-request-patch";
 import {
   formatGithubPullRequestUrl,
@@ -35,6 +36,7 @@ const GithubPullRequest = Schema.Struct({
   base: Schema.Struct({
     ref: Schema.String,
   }),
+  changed_files: Schema.Number,
   head: Schema.Struct({
     ref: Schema.String,
     sha: Schema.String,
@@ -612,18 +614,32 @@ const make = Effect.gen(function* () {
     const client = makeAuthedClient(httpClient, token);
     const hasToken = Option.isSome(token);
     const metadata = yield* fetchPullRequestMetadata(client, hasToken, ref);
+    const pullRequestUrl = formatGithubPullRequestUrl(ref);
+    const retrievedFileCount = yield* Ref.make(0);
     const fileBatches = pullRequestFileStream(
       client,
       hasToken,
       ref,
       `${githubApiBaseUrl}/repos/${ref.owner}/${ref.repo}/pulls/${ref.number}/files?per_page=${githubFilesPerPage}`
     ).pipe(
+      Stream.tap(() => Ref.update(retrievedFileCount, (count) => count + 1)),
       Stream.grouped(diffBatchSize),
       Stream.map(
         (files): PullRequestFileBatch => ({
           entries: mapGithubFiles(files),
           patch: buildUnifiedPatchFromGithubFiles(files),
         })
+      ),
+      Stream.onEnd(
+        Ref.get(retrievedFileCount).pipe(
+          Effect.flatMap((count) =>
+            assertPullRequestFilesComplete(
+              count,
+              metadata.changed_files,
+              pullRequestUrl
+            )
+          )
+        )
       )
     );
 
@@ -645,7 +661,7 @@ const make = Effect.gen(function* () {
       owner: ref.owner,
       repo: ref.repo,
       title: metadata.title,
-      url: formatGithubPullRequestUrl(ref),
+      url: pullRequestUrl,
     };
 
     return session;
