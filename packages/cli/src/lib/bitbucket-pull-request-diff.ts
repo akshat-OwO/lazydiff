@@ -28,14 +28,23 @@ export interface BitbucketDiffstatFile {
 }
 
 /**
- * Counts added and removed lines in a unified patch fragment, excluding file
- * headers (`---` / `+++`).
+ * Counts added and removed lines inside unified-diff hunks.
+ *
+ * File headers (`---` / `+++`) are ignored by only counting after a hunk
+ * header (`@@`). That keeps source lines that themselves begin with `++` or
+ * `--` (encoded as `+++…` / `---…` inside a hunk) from being discarded.
  */
 export const countUnifiedPatchChangedLines = (fragment: string): number => {
   let count = 0;
+  let inHunk = false;
 
   for (const line of fragment.split("\n")) {
-    if (line.startsWith("---") || line.startsWith("+++")) {
+    if (line.startsWith("@@")) {
+      inHunk = true;
+      continue;
+    }
+
+    if (!inHunk) {
       continue;
     }
 

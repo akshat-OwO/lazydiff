@@ -24,6 +24,21 @@ test("countUnifiedPatchChangedLines ignores file headers", () => {
   );
 });
 
+test("countUnifiedPatchChangedLines keeps header-like hunk content", () => {
+  strictEqual(
+    countUnifiedPatchChangedLines(`diff --git a/a.ts b/a.ts
+--- a/a.ts
++++ b/a.ts
+@@ -1,2 +1,2 @@
+--- leading dashes
+-++ leading pluses
++-- leading dashes
++++ leading pluses
+`),
+    4
+  );
+});
+
 test("isBinaryPatchFragment detects binary markers", () => {
   strictEqual(
     isBinaryPatchFragment(
