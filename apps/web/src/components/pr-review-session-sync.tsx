@@ -4,6 +4,8 @@ import { useEffect, useRef } from "react";
 import { annotationsAtom, sentAnnotationIdsAtom } from "@/lib/annotations";
 import {
   prReviewSessionActiveAtom,
+  prReviewSessionHeadShaAtom,
+  prReviewSessionMatchesHead,
   readPrReviewSession,
   writePrReviewSession,
 } from "@/lib/pr-review-session";
@@ -19,6 +21,9 @@ function PrReviewSessionSync() {
   const setAnnotations = useAtomSet(annotationsAtom);
   const setSentAnnotationIds = useAtomSet(sentAnnotationIdsAtom);
   const [sessionActive, setSessionActive] = useAtom(prReviewSessionActiveAtom);
+  const [sessionHeadSha, setSessionHeadSha] = useAtom(
+    prReviewSessionHeadShaAtom
+  );
   const restoredKeyRef = useRef<string | null>(null);
 
   const pullRequest =
@@ -29,11 +34,12 @@ function PrReviewSessionSync() {
   useEffect(() => {
     if (pullRequest === undefined) {
       setSessionActive(false);
+      setSessionHeadSha(null);
       restoredKeyRef.current = null;
       return;
     }
 
-    const key = `${pullRequest.owner}/${pullRequest.repo}#${pullRequest.number}`;
+    const key = `${pullRequest.owner}/${pullRequest.repo}#${pullRequest.number}@${pullRequest.headSha}`;
 
     if (restoredKeyRef.current === key) {
       return;
@@ -42,23 +48,51 @@ function PrReviewSessionSync() {
     restoredKeyRef.current = key;
     const stored = readPrReviewSession(pullRequest);
 
-    if (stored === null) {
+    if (
+      stored === null ||
+      !prReviewSessionMatchesHead(stored, pullRequest.headSha)
+    ) {
+      // Stale coordinates from an older head must not become sendable.
       setSessionActive(false);
+      setSessionHeadSha(null);
       return;
     }
 
     setSessionActive(true);
+    setSessionHeadSha(stored.headSha);
     setAnnotations(stored.annotations);
     setSentAnnotationIds(new Set(stored.sentAnnotationIds));
-  }, [pullRequest, setAnnotations, setSentAnnotationIds, setSessionActive]);
+  }, [
+    pullRequest,
+    setAnnotations,
+    setSentAnnotationIds,
+    setSessionActive,
+    setSessionHeadSha,
+  ]);
 
   useEffect(() => {
-    if (!sessionActive || pullRequest === undefined) {
+    if (
+      !sessionActive ||
+      pullRequest === undefined ||
+      sessionHeadSha === null ||
+      sessionHeadSha !== pullRequest.headSha
+    ) {
       return;
     }
 
-    writePrReviewSession(pullRequest, annotations, sentAnnotationIds);
-  }, [annotations, pullRequest, sentAnnotationIds, sessionActive]);
+    writePrReviewSession(
+      pullRequest,
+      annotations,
+      sentAnnotationIds,
+      sessionHeadSha
+    );
+  }, [
+    annotations,
+    pullRequest,
+    sentAnnotationIds,
+    sessionActive,
+    sessionHeadSha,
+  ]);
 
   return null;
 }

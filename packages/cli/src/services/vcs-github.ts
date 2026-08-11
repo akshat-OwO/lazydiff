@@ -98,6 +98,10 @@ const GithubGraphqlReviewComment = Schema.Struct({
 const GithubGraphqlReviewThread = Schema.Struct({
   comments: Schema.Struct({
     nodes: Schema.Array(GithubGraphqlReviewComment),
+    pageInfo: Schema.Struct({
+      endCursor: Schema.NullOr(Schema.String),
+      hasNextPage: Schema.Boolean,
+    }),
   }),
   diffSide: Schema.Literals(["LEFT", "RIGHT"]),
   id: Schema.String,
@@ -204,6 +208,10 @@ const reviewThreadsQuery = `query($owner: String!, $name: String!, $number: Int!
           startLine
           diffSide
           comments(first: 50) {
+            pageInfo {
+              endCursor
+              hasNextPage
+            }
             nodes {
               id
               databaseId
@@ -792,13 +800,29 @@ const make = Effect.gen(function* () {
         );
       }
 
+      const threads: GithubPrReviewThread[] = [];
+
+      for (const thread of pullRequest.reviewThreads.nodes) {
+        if (thread.comments.pageInfo.hasNextPage) {
+          return yield* Effect.fail(
+            new VcsError({
+              message: `Pull request ${pullRequestUrl} has a review thread with more than 50 comments, so the thread cannot be loaded completely.`,
+              reason: "Unsupported",
+            })
+          );
+        }
+
+        const mapped = mapGraphqlThread(thread);
+
+        if (mapped !== undefined) {
+          threads.push(mapped);
+        }
+      }
+
       return {
         hasNextPage: pullRequest.reviewThreads.pageInfo.hasNextPage,
         nextCursor: pullRequest.reviewThreads.pageInfo.endCursor,
-        threads: pullRequest.reviewThreads.nodes.flatMap((thread) => {
-          const mapped = mapGraphqlThread(thread);
-          return mapped === undefined ? [] : [mapped];
-        }),
+        threads,
       };
     });
 

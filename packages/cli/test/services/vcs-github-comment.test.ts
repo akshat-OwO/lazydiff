@@ -161,3 +161,86 @@ test("createPullRequestReview requires authentication", async () => {
   strictEqual(error.reason, "AuthenticationRequired");
   match(error.message, /authentication is required to comment/iu);
 });
+
+test("listPullRequestReviewThreads fails when nested comments are truncated", async () => {
+  const previous = process.env.GITHUB_TOKEN;
+  process.env.GITHUB_TOKEN = "test-token";
+
+  const FakeHttpLive = Layer.succeed(
+    HttpClient.HttpClient,
+    makeRecordingHttpClient(() =>
+      Response.json(
+        {
+          data: {
+            repository: {
+              pullRequest: {
+                reviewThreads: {
+                  nodes: [
+                    {
+                      comments: {
+                        nodes: [
+                          {
+                            author: { login: "akshat" },
+                            body: "first",
+                            createdAt: "2026-08-11T00:00:00Z",
+                            databaseId: 1,
+                            id: "COMMENT_1",
+                            replyTo: null,
+                          },
+                        ],
+                        pageInfo: {
+                          endCursor: "cursor-1",
+                          hasNextPage: true,
+                        },
+                      },
+                      diffSide: "RIGHT",
+                      id: "THREAD_1",
+                      isOutdated: false,
+                      isResolved: false,
+                      line: 10,
+                      path: "src/a.ts",
+                      startLine: null,
+                    },
+                  ],
+                  pageInfo: {
+                    endCursor: null,
+                    hasNextPage: false,
+                  },
+                },
+              },
+            },
+          },
+        },
+        { status: 200 }
+      )
+    )
+  );
+
+  try {
+    const error = await Effect.gen(function* () {
+      const vcs = yield* VCSService;
+      return yield* vcs
+        .listPullRequestReviewThreads(pullRequestRef)
+        .pipe(Effect.flip);
+    }).pipe(
+      Effect.provide(
+        GithubLive.pipe(
+          Layer.provide(GithubAuthTestLive),
+          Layer.provide(FakeHttpLive),
+          Layer.provide(NodeServices.layer)
+        )
+      ),
+      Effect.runPromise
+    );
+
+    strictEqual(error._tag, "VcsError");
+    strictEqual(error.reason, "Unsupported");
+    match(error.message, /more than 50 comments/iu);
+  } finally {
+    if (previous === undefined) {
+      delete process.env.GITHUB_TOKEN;
+    } else {
+      process.env.GITHUB_TOKEN = previous;
+    }
+  }
+});

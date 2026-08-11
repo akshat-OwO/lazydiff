@@ -38,6 +38,7 @@ import { formatLazydiffTitle } from "@/lib/app-title";
 import {
   clearPrReviewSession,
   prReviewSessionActiveAtom,
+  prReviewSessionHeadShaAtom,
   writePrReviewSession,
 } from "@/lib/pr-review-session";
 import {
@@ -180,6 +181,7 @@ function PrReviewSessionToggle() {
   const setAnnotations = useAtomSet(annotationsAtom);
   const setSentAnnotationIds = useAtomSet(sentAnnotationIdsAtom);
   const [sessionActive, setSessionActive] = useAtom(prReviewSessionActiveAtom);
+  const setSessionHeadSha = useAtomSet(prReviewSessionHeadShaAtom);
 
   if (
     repository._tag !== "Success" ||
@@ -198,6 +200,7 @@ function PrReviewSessionToggle() {
         onClick={() => {
           clearPrReviewSession(pullRequest);
           setSessionActive(false);
+          setSessionHeadSha(null);
           setAnnotations([]);
           setSentAnnotationIds(new Set());
         }}
@@ -215,7 +218,13 @@ function PrReviewSessionToggle() {
     <Button
       aria-label="Start review"
       onClick={() => {
-        writePrReviewSession(pullRequest, annotations, sentAnnotationIds);
+        writePrReviewSession(
+          pullRequest,
+          annotations,
+          sentAnnotationIds,
+          pullRequest.headSha
+        );
+        setSessionHeadSha(pullRequest.headSha);
         setSessionActive(true);
       }}
       size="xs"

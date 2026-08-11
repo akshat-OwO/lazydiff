@@ -32,6 +32,7 @@ import {
 } from "@/lib/annotations";
 import type { DiffAnnotation } from "@/lib/annotations";
 import { copyTextToClipboard } from "@/lib/clipboard";
+import { prReviewSessionHeadShaAtom } from "@/lib/pr-review-session";
 import {
   gitChangeScopeAtom,
   githubPrAnnotationsPostMutation,
@@ -149,6 +150,7 @@ const annotationsSummary = (
 function AnnotationsSidebar() {
   const scope = useAtomValue(gitChangeScopeAtom);
   const repository = useAtomValue(gitRepositoryAtom);
+  const sessionHeadSha = useAtomValue(prReviewSessionHeadShaAtom);
   const allAnnotations = useAtomValue(annotationsAtom);
   const sentAnnotationIds = useAtomValue(sentAnnotationIdsAtom);
   const setAnnotations = useAtomSet(annotationsAtom);
@@ -159,9 +161,21 @@ function AnnotationsSidebar() {
   });
   const refreshThreads = useAtomRefresh(githubPrReviewThreadsAtom);
   const annotations = annotationsForScope(allAnnotations, scope);
+  const pullRequestHeadSha =
+    repository._tag === "Success"
+      ? repository.value.data.pullRequest?.headSha
+      : undefined;
+  // Live in-memory annotations (no session head) are always for the opened PR.
+  // A persisted session is only sendable while its captured head still matches.
+  const coordinatesMatchHead =
+    sessionHeadSha === null ||
+    (pullRequestHeadSha !== undefined && sessionHeadSha === pullRequestHeadSha);
   const pendingAnnotations = useMemo(
-    () => unsentAnnotations(annotations, sentAnnotationIds),
-    [annotations, sentAnnotationIds]
+    () =>
+      coordinatesMatchHead
+        ? unsentAnnotations(annotations, sentAnnotationIds)
+        : [],
+    [annotations, coordinatesMatchHead, sentAnnotationIds]
   );
   const [open, setOpen] = useAtom(annotationsSidebarOpenAtom);
   const [copyState, setCopyState] = useState<CopyState>("idle");
@@ -197,6 +211,15 @@ function AnnotationsSidebar() {
 
   const sendAnnotationsToRemote = () => {
     if (sendState === "sending" || pendingAnnotations.length === 0) {
+      return;
+    }
+
+    if (!coordinatesMatchHead) {
+      setSendError(
+        "Local annotations were saved against a different pull request head. Start a new review after re-checking the diff."
+      );
+      setSendState("failed");
+      window.setTimeout(() => setSendState("idle"), 2000);
       return;
     }
 
