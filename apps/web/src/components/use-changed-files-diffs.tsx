@@ -1,4 +1,5 @@
 import { useAtom, useAtomValue } from "@effect/atom-react";
+import type { GithubPrReviewThread } from "@lazydiff/protocol";
 import type {
   CodeViewDiffItem,
   CodeViewItem,
@@ -16,10 +17,13 @@ import { AnnotationDraftForm } from "@/components/annotation-draft-form";
 import {
   emptyFileDiffs,
   gutterUtilityCSS,
+  remoteThreadLineAnnotation,
+  remoteThreadsForFilePath,
   resolveCodeViewItem,
 } from "@/components/changed-files-diffs-helpers";
 import type { AnnotationMetadata } from "@/components/changed-files-diffs-helpers";
 import { InlineAnnotationComment } from "@/components/inline-annotation-comment";
+import { RemoteReviewThread } from "@/components/remote-review-thread";
 import { useTheme } from "@/components/theme-provider";
 import {
   annotationAnchorForRange,
@@ -46,12 +50,17 @@ import {
   describeModeChange,
 } from "@/lib/file-diff-summary";
 import { preloadFileDiffHighlighter } from "@/lib/preload-file-diff-highlighter";
-import { gitChangeScopeAtom, gitDiffAtom } from "@/lib/rpc";
+import {
+  gitChangeScopeAtom,
+  gitDiffAtom,
+  githubPrReviewThreadsAtom,
+} from "@/lib/rpc";
 import { cn } from "@/lib/utils";
 
 const useChangedFilesDiffs = () => {
   const gitDiff = useAtomValue(gitDiffAtom);
   const annotations = useAtomValue(annotationsAtom);
+  const reviewThreads = useAtomValue(githubPrReviewThreadsAtom);
   const [annotationFocus, setAnnotationFocus] = useAtom(annotationFocusAtom);
   const [draft, setDraft] = useAtom(annotationDraftAtom);
   const scope = useAtomValue(gitChangeScopeAtom);
@@ -115,6 +124,24 @@ const useChangedFilesDiffs = () => {
     return map;
   }, [scopedAnnotations]);
 
+  const remoteThreads = useMemo(
+    () =>
+      reviewThreads._tag === "Success"
+        ? reviewThreads.value.data.threads
+        : ([] as readonly GithubPrReviewThread[]),
+    [reviewThreads]
+  );
+
+  const remoteThreadsById = useMemo(() => {
+    const map = new Map<string, GithubPrReviewThread>();
+
+    for (const thread of remoteThreads) {
+      map.set(thread.id, thread);
+    }
+
+    return map;
+  }, [remoteThreads]);
+
   /**
    * Only annotated files land in this map, so the per-file lookup below stays a
    * reference comparison for the thousands of files that carry no annotations.
@@ -139,7 +166,11 @@ const useChangedFilesDiffs = () => {
       existing.push(annotation);
     };
 
-    if (scopedAnnotations.length > 0 || draft !== null) {
+    if (
+      scopedAnnotations.length > 0 ||
+      draft !== null ||
+      remoteThreads.length > 0
+    ) {
       for (const fileDiff of fileDiffs) {
         for (const annotation of scopedAnnotations) {
           if (!annotationMatchesFileDiff(annotation, fileDiff)) {
@@ -152,6 +183,17 @@ const useChangedFilesDiffs = () => {
             metadata: { annotationId: annotation.id, kind: "saved" },
             side: anchor.side,
           });
+        }
+
+        for (const thread of remoteThreadsForFilePath(
+          remoteThreads,
+          fileDiff.name
+        )) {
+          const remoteAnnotation = remoteThreadLineAnnotation(thread);
+
+          if (remoteAnnotation !== undefined) {
+            append(fileDiff, remoteAnnotation);
+          }
         }
 
         if (
@@ -170,7 +212,7 @@ const useChangedFilesDiffs = () => {
     }
 
     return map;
-  }, [draft, fileDiffs, scope, scopedAnnotations]);
+  }, [draft, fileDiffs, remoteThreads, scope, scopedAnnotations]);
 
   const items = useMemo(
     () =>
@@ -389,6 +431,17 @@ const useChangedFilesDiffs = () => {
         ) : null;
       }
 
+      if (annotation.metadata.kind === "remote") {
+        const thread = remoteThreadsById.get(annotation.metadata.threadId);
+
+        return thread === undefined ? null : (
+          <RemoteReviewThread
+            key={`${thread.id}:${thread.isResolved ? "resolved" : "open"}`}
+            thread={thread}
+          />
+        );
+      }
+
       const saved = annotationsById.get(annotation.metadata.annotationId);
 
       if (saved === undefined) {
@@ -403,7 +456,7 @@ const useChangedFilesDiffs = () => {
         />
       );
     },
-    [annotationsById, draft, scope]
+    [annotationsById, draft, remoteThreadsById, scope]
   );
 
   const codeViewOptions = useMemo(

@@ -1,3 +1,5 @@
+import type { GithubPrReviewThread } from "@lazydiff/protocol";
+import { githubSideToPierre } from "@lazydiff/protocol";
 import type {
   CodeViewDiffItem,
   DiffLineAnnotation,
@@ -13,7 +15,40 @@ type AnnotationMetadata =
     }
   | {
       readonly kind: "draft";
+    }
+  | {
+      readonly kind: "remote";
+      readonly threadId: string;
     };
+
+/**
+ * Remote threads that can be projected onto a file in the live diff.
+ */
+const remoteThreadsForFilePath = (
+  threads: readonly GithubPrReviewThread[],
+  filePath: string
+): readonly GithubPrReviewThread[] =>
+  threads.filter(
+    (thread) =>
+      thread.path === filePath && thread.line !== null && !thread.isOutdated
+  );
+
+const remoteThreadLineAnnotation = (
+  thread: GithubPrReviewThread
+): DiffLineAnnotation<AnnotationMetadata> | undefined => {
+  if (thread.line === null || thread.isOutdated) {
+    return undefined;
+  }
+
+  return {
+    lineNumber: thread.line,
+    metadata: {
+      kind: "remote",
+      threadId: thread.id,
+    },
+    side: githubSideToPierre(thread.side),
+  };
+};
 
 const emptyFileDiffs: readonly FileDiffMetadata[] = [];
 
@@ -81,6 +116,8 @@ const resolveCodeViewItem = (
 export {
   emptyFileDiffs,
   gutterUtilityCSS,
+  remoteThreadLineAnnotation,
+  remoteThreadsForFilePath,
   resolveCodeViewItem,
   type AnnotationMetadata,
 };
