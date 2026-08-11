@@ -98,11 +98,19 @@ const statusFromCode = (code: string): GitFileStatus | undefined => {
   }
 };
 
+/**
+ * Status rows used for scoped diffs. Renames/copies keep the source path so
+ * pathspecs can include both sides; protocol-facing entries drop it.
+ */
+interface ParsedGitStatusEntry extends GitStatusEntry {
+  readonly previousPath?: string;
+}
+
 const parseGitStatus = Effect.fn("lazydiff/services/git/parseGitStatus")(
   (output: string) =>
     Effect.gen(function* () {
       const fields = parseNullSeparatedPaths(output);
-      const entries: GitStatusEntry[] = [];
+      const entries: ParsedGitStatusEntry[] = [];
 
       for (let index = 0; index < fields.length;) {
         const statusCode = fields[index];
@@ -119,8 +127,23 @@ const parseGitStatus = Effect.fn("lazydiff/services/git/parseGitStatus")(
 
         const isRenameOrCopy =
           statusCode.startsWith("R") || statusCode.startsWith("C");
-        const pathIndex = index + (isRenameOrCopy ? 2 : 1);
-        const filePath = fields[pathIndex];
+
+        if (isRenameOrCopy) {
+          const previousPath = fields[index + 1];
+          const filePath = fields[index + 2];
+
+          if (previousPath === undefined || filePath === undefined) {
+            return yield* Effect.fail(
+              new Error(`Missing path for Git status: ${statusCode}`)
+            );
+          }
+
+          entries.push({ path: filePath, previousPath, status });
+          index += 3;
+          continue;
+        }
+
+        const filePath = fields[index + 1];
 
         if (filePath === undefined) {
           return yield* Effect.fail(
@@ -129,15 +152,37 @@ const parseGitStatus = Effect.fn("lazydiff/services/git/parseGitStatus")(
         }
 
         entries.push({ path: filePath, status });
-        index += isRenameOrCopy ? 3 : 2;
+        index += 2;
       }
 
       return entries;
     })
 );
 
-const sortStatusEntries = (entries: readonly GitStatusEntry[]) =>
+const sortStatusEntries = <Entry extends GitStatusEntry>(
+  entries: readonly Entry[]
+) =>
   [...entries].toSorted((left, right) => left.path.localeCompare(right.path));
+
+/** Pathspecs must name both rename/copy sides or Git emits a new-file diff. */
+const pathspecsForEntries = (entries: readonly ParsedGitStatusEntry[]) => {
+  const paths: string[] = [];
+
+  for (const entry of entries) {
+    if (entry.previousPath !== undefined) {
+      paths.push(entry.previousPath);
+    }
+
+    paths.push(entry.path);
+  }
+
+  return paths;
+};
+
+const toProtocolStatusEntries = (
+  entries: readonly ParsedGitStatusEntry[]
+): GitStatusEntry[] =>
+  entries.map(({ path: filePath, status }) => ({ path: filePath, status }));
 
 const headsAreEqual = (left: GitHead, right: GitHead) => {
   if (left._tag === "Branch" && right._tag === "Branch") {
@@ -667,7 +712,7 @@ const make = (workingDirectory?: string) =>
         );
         const trackedEntries = yield* parseGitStatus(trackedOutput);
         const untrackedEntries = parseNullSeparatedPaths(untrackedOutput).map(
-          (filePath): GitStatusEntry => ({
+          (filePath): ParsedGitStatusEntry => ({
             path: filePath,
             status: "untracked",
           })
@@ -686,7 +731,10 @@ const make = (workingDirectory?: string) =>
           "-z",
           "--find-renames",
           "--",
-        ]).pipe(Effect.flatMap(parseGitStatus), Effect.map(sortStatusEntries))
+        ]).pipe(
+          Effect.flatMap(parseGitStatus),
+          Effect.map((entries) => sortStatusEntries(entries))
+        )
     );
 
     const resolveComparisonBase = Effect.fn(
@@ -730,10 +778,9 @@ const make = (workingDirectory?: string) =>
       })
     );
 
-    const fileStatuses = Effect.fn("lazydiff/services/git/fileStatuses")((
-      scope: GitChangeScope,
-      branch?: string
-    ) => {
+    const parsedFileStatuses = Effect.fn(
+      "lazydiff/services/git/parsedFileStatuses"
+    )((scope: GitChangeScope, branch?: string) => {
       if (scope === "unstaged") {
         return unstagedStatuses();
       }
@@ -745,6 +792,13 @@ const make = (workingDirectory?: string) =>
       return committedStatuses(branch);
     });
 
+    const fileStatuses = Effect.fn("lazydiff/services/git/fileStatuses")(
+      (scope: GitChangeScope, branch?: string) =>
+        parsedFileStatuses(scope, branch).pipe(
+          Effect.map(toProtocolStatusEntries)
+        )
+    );
+
     const changedFiles = Effect.fn("lazydiff/services/git/changedFiles")(
       (scope: GitChangeScope, branch?: string) =>
         fileStatuses(scope, branch).pipe(
@@ -754,7 +808,7 @@ const make = (workingDirectory?: string) =>
 
     const diffEntryBatch = Effect.fn("lazydiff/services/git/diffEntryBatch")((
       scope: GitChangeScope,
-      entries: readonly GitStatusEntry[],
+      entries: readonly ParsedGitStatusEntry[],
       branch?: string
     ) => {
       if (entries.length === 0) {
@@ -762,12 +816,13 @@ const make = (workingDirectory?: string) =>
       }
 
       if (scope === "unstaged") {
-        const trackedPaths = entries
-          .filter(({ status }) => status !== "untracked")
-          .map(({ path: filePath }) => filePath);
+        const trackedEntries = entries.filter(
+          ({ status }) => status !== "untracked"
+        );
         const untrackedPaths = entries
           .filter(({ status }) => status === "untracked")
           .map(({ path: filePath }) => filePath);
+        const trackedPaths = pathspecsForEntries(trackedEntries);
 
         return Effect.gen(function* () {
           const trackedPatch =
@@ -787,7 +842,7 @@ const make = (workingDirectory?: string) =>
         });
       }
 
-      const paths = entries.map(({ path: filePath }) => filePath);
+      const paths = pathspecsForEntries(entries);
 
       if (scope === "staged") {
         return run(["diff", "--cached", "--find-renames", "--", ...paths]).pipe(
@@ -819,7 +874,7 @@ const make = (workingDirectory?: string) =>
       branch?: string
     ): Stream.Stream<DiffBatch, Error> =>
       Stream.unwrap(
-        fileStatuses(scope, branch).pipe(
+        parsedFileStatuses(scope, branch).pipe(
           Effect.map((entries) => {
             if (entries.length === 0) {
               return Stream.succeed<DiffBatch>({

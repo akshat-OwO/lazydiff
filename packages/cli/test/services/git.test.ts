@@ -2,7 +2,7 @@ import { deepStrictEqual, strictEqual } from "node:assert";
 import { test } from "node:test";
 
 import { NodeServices } from "@effect/platform-node";
-import { Effect, FileSystem, Path } from "effect";
+import { Effect, FileSystem, Path, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { Git, makeGitLive } from "../../src/services/git.ts";
@@ -744,4 +744,73 @@ test("deleteBranch deletes available local and remote refs and protects the curr
     result.currentError.message.includes("currently checked out branch"),
     true
   );
+});
+
+test("scopeDiff preserves rename diffs when batching by path", async () => {
+  const result = await Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const repository = yield* fileSystem.makeTempDirectoryScoped({
+      prefix: "lazydiff-git-rename-",
+    });
+    const run = (args: readonly string[]) =>
+      childProcessSpawner.string(
+        ChildProcess.make("git", args, { cwd: repository })
+      );
+    const commit = (message: string) =>
+      run([
+        "-c",
+        "user.name=Lazydiff Test",
+        "-c",
+        "user.email=test@lazydiff.local",
+        "commit",
+        "-m",
+        message,
+      ]);
+
+    yield* run(["init", "--initial-branch", "main"]);
+    yield* fileSystem.writeFileString(
+      path.join(repository, "old-name.ts"),
+      "export const value = 1;\n"
+    );
+    yield* run(["add", "old-name.ts"]);
+    yield* commit("Initial commit");
+
+    yield* run(["mv", "old-name.ts", "new-name.ts"]);
+    yield* fileSystem.writeFileString(
+      path.join(repository, "new-name.ts"),
+      "export const value = 1;\nexport const next = 2;\n"
+    );
+    yield* run(["add", "new-name.ts"]);
+
+    return yield* Effect.gen(function* () {
+      const git = yield* Git;
+      const [statuses, patch, batches] = yield* Effect.all([
+        git.fileStatuses("staged"),
+        git.scopeDiff("staged"),
+        // diffBatches stays open for working-tree watches; stop at the sync.
+        Stream.runCollect(
+          git
+            .diffBatches("staged")
+            .pipe(Stream.takeUntil((batch) => batch.complete))
+        ),
+      ]);
+
+      return {
+        batchPatch: batches.map((batch) => batch.patch).join(""),
+        patch,
+        statuses,
+      };
+    }).pipe(Effect.provide(makeGitLive({ workingDirectory: repository })));
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer), Effect.runPromise);
+
+  deepStrictEqual(result.statuses, [
+    { path: "new-name.ts", status: "renamed" },
+  ]);
+  strictEqual(result.patch.includes("rename from old-name.ts"), true);
+  strictEqual(result.patch.includes("rename to new-name.ts"), true);
+  strictEqual(result.patch.includes("--- /dev/null"), false);
+  strictEqual(result.batchPatch.includes("rename from old-name.ts"), true);
+  strictEqual(result.batchPatch.includes("rename to new-name.ts"), true);
 });
