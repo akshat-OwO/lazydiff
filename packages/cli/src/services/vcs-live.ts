@@ -1,7 +1,7 @@
 import { Effect, Layer, Option } from "effect";
 
 import { parseBitbucketPullRequestUrl } from "@/services/bitbucket-pull-request-url";
-import { parseGithubPullRequestUrl } from "@/services/github-pull-request-url";
+import { parseGithubPullRequestUrl } from "@/lib/github-pull-request-url";
 import type { VCSServiceShape, PullRequestRef } from "@/services/vcs";
 import { VCSService, VcsError } from "@/services/vcs";
 import { makeBitbucketVcs } from "@/services/vcs-bitbucket";
