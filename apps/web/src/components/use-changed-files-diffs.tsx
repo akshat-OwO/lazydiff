@@ -268,6 +268,9 @@ const useChangedFilesDiffs = () => {
         scope,
         side: anchor.side,
       });
+      // Clear Pierre's uncontrolled selection so the next gutter gesture starts
+      // fresh — remounting the whole CodeView would drop scroll position.
+      codeViewRef.current?.clearSelectedLines();
       void navigate({
         hash: toLocationHash(item.fileDiff.name),
         hashScrollIntoView: false,
