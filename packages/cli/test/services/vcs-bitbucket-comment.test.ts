@@ -312,3 +312,135 @@ test("listPullRequestReviewThreads includes nested Bitbucket replies", async () 
     ["root", "reply", "nested"]
   );
 });
+
+test("listPullRequestReviewThreads treats empty Bitbucket resolution objects as resolved", async () => {
+  const FakeHttpLive = Layer.succeed(
+    HttpClient.HttpClient,
+    makeRecordingHttpClient((request) => {
+      if (!request.url.includes("/comments")) {
+        return new Response("unused", { status: 404 });
+      }
+
+      return Response.json({
+        values: [
+          {
+            content: { raw: "already resolved on Bitbucket" },
+            created_on: "2026-08-10T00:00:00.000000+00:00",
+            id: 11,
+            inline: { from: null, path: "src/app.ts", to: 4 },
+            // List endpoint returns an empty object instead of the full
+            // resolution payload that the detail endpoint includes.
+            resolution: {},
+            user: { nickname: "dev" },
+          },
+        ],
+      });
+    })
+  );
+
+  const threads = await Effect.gen(function* () {
+    const vcs = yield* VCSService;
+    return yield* vcs.listPullRequestReviewThreads(pullRequestRef);
+  }).pipe(
+    Effect.provide(provideBitbucket(FakeHttpLive)),
+    Effect.provide(
+      bitbucketAuthConfig({
+        BITBUCKET_EMAIL: "dev@example.com",
+        BITBUCKET_TOKEN: "test-token",
+      })
+    ),
+    Effect.runPromise
+  );
+
+  strictEqual(threads.length, 1);
+  strictEqual(threads[0]?.isResolved, true);
+});
+
+test("setPullRequestReviewThreadResolved treats already-resolved Bitbucket threads as success", async () => {
+  let resolvePosts = 0;
+
+  const FakeHttpLive = Layer.succeed(
+    HttpClient.HttpClient,
+    makeRecordingHttpClient((request) => {
+      if (request.method === "POST" && request.url.endsWith("/resolve")) {
+        resolvePosts += 1;
+        return Response.json(
+          {
+            error: { message: "Comment has already been resolved." },
+            type: "error",
+          },
+          { status: 409 }
+        );
+      }
+
+      return new Response("unused", { status: 404 });
+    })
+  );
+
+  const result = await Effect.gen(function* () {
+    const vcs = yield* VCSService;
+    return yield* vcs.setPullRequestReviewThreadResolved(
+      pullRequestRef,
+      "11",
+      true
+    );
+  }).pipe(
+    Effect.provide(provideBitbucket(FakeHttpLive)),
+    Effect.provide(
+      bitbucketAuthConfig({
+        BITBUCKET_EMAIL: "dev@example.com",
+        BITBUCKET_TOKEN: "test-token",
+      })
+    ),
+    Effect.runPromise
+  );
+
+  strictEqual(resolvePosts, 1);
+  strictEqual(result.isResolved, true);
+});
+
+test("setPullRequestReviewThreadResolved treats already-open Bitbucket threads as success", async () => {
+  let resolveDeletes = 0;
+
+  const FakeHttpLive = Layer.succeed(
+    HttpClient.HttpClient,
+    makeRecordingHttpClient((request) => {
+      if (request.method === "DELETE" && request.url.endsWith("/resolve")) {
+        resolveDeletes += 1;
+        return Response.json(
+          {
+            error: {
+              message:
+                "No PullRequestCommentResolution matches the given query.",
+            },
+            type: "error",
+          },
+          { status: 404 }
+        );
+      }
+
+      return new Response("unused", { status: 500 });
+    })
+  );
+
+  const result = await Effect.gen(function* () {
+    const vcs = yield* VCSService;
+    return yield* vcs.setPullRequestReviewThreadResolved(
+      pullRequestRef,
+      "11",
+      false
+    );
+  }).pipe(
+    Effect.provide(provideBitbucket(FakeHttpLive)),
+    Effect.provide(
+      bitbucketAuthConfig({
+        BITBUCKET_EMAIL: "dev@example.com",
+        BITBUCKET_TOKEN: "test-token",
+      })
+    ),
+    Effect.runPromise
+  );
+
+  strictEqual(resolveDeletes, 1);
+  strictEqual(result.isResolved, false);
+});

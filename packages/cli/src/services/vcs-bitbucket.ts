@@ -268,13 +268,14 @@ const authorLoginOf = (
   return "ghost";
 };
 
+/**
+ * Bitbucket's comment list endpoint returns `resolution: {}` for resolved
+ * threads (without `type`), while the detail endpoint includes the full
+ * resolution object. Treat any non-null resolution as resolved.
+ */
 const isCommentResolved = (
   resolution: typeof BitbucketCommentResolution.Type | undefined
-): boolean =>
-  resolution !== undefined &&
-  resolution !== null &&
-  resolution.type !== undefined &&
-  resolution.type.length > 0;
+): boolean => resolution !== undefined && resolution !== null;
 
 const inlineSideAndLine = (
   inline: NonNullable<typeof BitbucketCommentInline.Type>
@@ -418,7 +419,10 @@ const executeOkResponse = (
   hasCredentials: boolean,
   ref: PullRequestRef,
   request: HttpClientRequest.HttpClientRequest,
-  action: "fetch" | "comment"
+  action: "fetch" | "comment",
+  options?: {
+    readonly acceptStatuses?: ReadonlySet<number>;
+  }
 ) =>
   Effect.gen(function* () {
     const response = yield* client.execute(request).pipe(
@@ -430,6 +434,10 @@ const executeOkResponse = (
           })
       )
     );
+
+    if (options?.acceptStatuses?.has(response.status) === true) {
+      return response;
+    }
 
     if (response.status < 200 || response.status >= 300) {
       return yield* Effect.fail(
@@ -446,7 +454,10 @@ const postJson = (
   ref: PullRequestRef,
   url: string,
   body: unknown,
-  action: "fetch" | "comment"
+  action: "fetch" | "comment",
+  options?: {
+    readonly acceptStatuses?: ReadonlySet<number>;
+  }
 ) =>
   Effect.gen(function* () {
     const request = yield* HttpClientRequest.post(url, {
@@ -467,7 +478,8 @@ const postJson = (
       hasCredentials,
       ref,
       request,
-      action
+      action,
+      options
     );
   });
 
@@ -476,7 +488,10 @@ const deleteOk = (
   hasCredentials: boolean,
   ref: PullRequestRef,
   url: string,
-  action: "fetch" | "comment"
+  action: "fetch" | "comment",
+  options?: {
+    readonly acceptStatuses?: ReadonlySet<number>;
+  }
 ) =>
   Effect.gen(function* () {
     const request = HttpClientRequest.delete(url, {
@@ -488,7 +503,8 @@ const deleteOk = (
       hasCredentials,
       ref,
       request,
-      action
+      action,
+      options
     );
   });
 
@@ -1134,14 +1150,21 @@ export const makeBitbucketVcs = Effect.gen(function* () {
     const resolveUrl = `${apiPullRequestPath(ref)}/comments/${commentId}/resolve`;
 
     if (resolved) {
+      // 409 means the thread is already resolved on Bitbucket.
       const response = yield* postJson(
         client,
         true,
         ref,
         resolveUrl,
         {},
-        "comment"
+        "comment",
+        { acceptStatuses: new Set([409]) }
       );
+
+      if (response.status === 409) {
+        return { isResolved: true };
+      }
+
       const json = yield* response.json.pipe(
         Effect.mapError(
           (error) =>
@@ -1162,11 +1185,14 @@ export const makeBitbucketVcs = Effect.gen(function* () {
       );
 
       return {
-        isResolved: resolution.type !== undefined && resolution.type.length > 0,
+        isResolved: isCommentResolved(resolution),
       };
     }
 
-    yield* deleteOk(client, true, ref, resolveUrl, "comment");
+    // 404 means there is no resolution to clear (already open).
+    yield* deleteOk(client, true, ref, resolveUrl, "comment", {
+      acceptStatuses: new Set([404]),
+    });
     return { isResolved: false };
   });
 
