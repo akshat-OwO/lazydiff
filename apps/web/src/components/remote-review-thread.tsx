@@ -30,7 +30,10 @@ function RemoteReviewThread({ className, thread }: RemoteReviewThreadProps) {
   const [reply, setReply] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | undefined>();
-  const [expanded, setExpanded] = useState(!thread.isResolved);
+  // Undefined means follow the live resolved state; a boolean is a user override.
+  const [expandedOverride, setExpandedOverride] = useState<
+    boolean | undefined
+  >();
   const formId = useId();
   const [parentComment] = thread.comments;
 
@@ -44,10 +47,11 @@ function RemoteReviewThread({ className, thread }: RemoteReviewThreadProps) {
           (candidate) => candidate.id === thread.id
         ) ?? thread)
       : thread;
+  const expanded = expandedOverride ?? !liveThread.isResolved;
 
-  const runAction = async (action: () => Promise<void>) => {
+  const runAction = async (action: () => Promise<void>): Promise<boolean> => {
     if (pending) {
-      return;
+      return false;
     }
 
     setError(undefined);
@@ -56,12 +60,14 @@ function RemoteReviewThread({ className, thread }: RemoteReviewThreadProps) {
     try {
       await action();
       refreshThreads();
+      return true;
     } catch (actionError) {
       setError(
         actionError instanceof Error
           ? actionError.message
           : "Unable to update the review thread"
       );
+      return false;
     } finally {
       setPending(false);
     }
@@ -85,7 +91,11 @@ function RemoteReviewThread({ className, thread }: RemoteReviewThreadProps) {
         <button
           aria-expanded={expanded}
           className="flex min-w-0 flex-1 items-center gap-1 text-left"
-          onClick={() => setExpanded((current) => !current)}
+          onClick={() =>
+            setExpandedOverride(
+              (current) => !(current ?? !liveThread.isResolved)
+            )
+          }
           type="button"
         >
           <ChevronRightIcon
@@ -116,7 +126,7 @@ function RemoteReviewThread({ className, thread }: RemoteReviewThreadProps) {
         <Button
           disabled={pending}
           onClick={() =>
-            runAction(async () => {
+            void runAction(async () => {
               await resolveThread({
                 payload: {
                   data: {
@@ -160,18 +170,23 @@ function RemoteReviewThread({ className, thread }: RemoteReviewThreadProps) {
                 return;
               }
 
-              void runAction(async () => {
-                await replyToComment({
-                  payload: {
-                    data: {
-                      body: trimmed,
-                      commentId: parentComment.databaseId,
+              void (async () => {
+                const ok = await runAction(async () => {
+                  await replyToComment({
+                    payload: {
+                      data: {
+                        body: trimmed,
+                        commentId: parentComment.databaseId,
+                      },
+                      type: "github.pr.review-comments.reply",
                     },
-                    type: "github.pr.review-comments.reply",
-                  },
+                  });
                 });
-                setReply("");
-              });
+
+                if (ok) {
+                  setReply("");
+                }
+              })();
             }}
           >
             <Textarea
